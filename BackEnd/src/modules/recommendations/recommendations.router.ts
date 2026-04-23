@@ -5,6 +5,7 @@ import { validate }           from '@/middleware/validate.middleware';
 import { successResponse }    from '@/shared/utils/response.util';
 import {
   getFieldRecommendations,
+  getFieldRecommendationHistory,
   getSubBlockRecommendations,
   submitFeedback,
   FeedbackSchema,
@@ -36,6 +37,20 @@ recommendationsRouter.get(
       latestJobId:       result.latestJobId,
       latestEvaluatedAt: result.latestEvaluatedAt,
     }));
+  }),
+);
+
+// GET /fields/:fieldId/recommendations/history — historical recommendations
+recommendationsRouter.get(
+  '/fields/:fieldId/recommendations/history',
+  requireAuth,
+  requireFieldAccess('viewer'),
+  h(async (req, res) => {
+    const result = await getFieldRecommendationHistory(
+      req.params['fieldId']!,
+      req.query as Record<string, unknown>,
+    );
+    res.json(successResponse(result.rows, result.meta));
   }),
 );
 

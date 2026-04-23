@@ -30,11 +30,11 @@ const envSchema = z.object({
   DECISION_ENGINE_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
 
   // Cloudflare R2 (opsional saat development)
-  R2_ENDPOINT: z.string().url().optional(),
+  R2_ENDPOINT: z.preprocess((val) => val === '' ? undefined : val, z.string().url().optional()),
   R2_ACCESS_KEY_ID: z.string().optional(),
   R2_SECRET_ACCESS_KEY: z.string().optional(),
   R2_BUCKET_NAME: z.string().default('awd-orthomosaic'),
-  R2_PUBLIC_URL: z.string().url().optional(),
+  R2_PUBLIC_URL: z.preprocess((val) => val === '' ? undefined : val, z.string().url().optional()),
 });
 
 const _parsed = envSchema.safeParse(process.env);

@@ -1,10 +1,8 @@
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, sql, desc } from 'drizzle-orm';
 import axios from 'axios';
 import { db } from '@/db/client';
-import {
-  orthomosaicUploads as uploadsTable,
-  mapLayers as layersTable,
-} from '@/db/schema/mst';
+import { mapLayers as layersTable } from '@/db/schema/mst';
+import { orthomosaicUploads as uploadsTable } from '@/db/schema/trx';
 import { config } from '@/config';
 import { logger } from '@/shared/utils/logger.util';
 import { r2Service } from './r2.service';

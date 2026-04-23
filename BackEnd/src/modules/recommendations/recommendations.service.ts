@@ -1,4 +1,4 @@
-import { eq, and, sql, desc } from 'drizzle-orm';
+import { eq, and, sql, desc, ne } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '@/db/client';
 import {
@@ -48,6 +48,51 @@ export async function getFieldRecommendations(
     latestJobId:       latestJob.id,
     latestEvaluatedAt: latestJob.completedAt,
   };
+}
+
+/** Historical recommendations per field (executed, skipped, deferred) */
+export async function getFieldRecommendationHistory(
+  fieldId: string,
+  query:   Record<string, unknown>,
+) {
+  const { page, limit, offset } = parsePagination(query);
+
+  const [rows, [{ value: total }]] = await Promise.all([
+    db
+      .select({
+        id: recsTable.id,
+        decisionJobId: recsTable.decisionJobId,
+        subBlockId: recsTable.subBlockId,
+        recommendationType: recsTable.recommendationType,
+        commandText: recsTable.commandText,
+        reasonSummary: recsTable.reasonSummary,
+        confidenceLevel: recsTable.confidenceLevel,
+        feedbackStatus: recsTable.feedbackStatus,
+        operatorNotes: recsTable.operatorNotes,
+        feedbackAt: recsTable.feedbackAt,
+        createdAt: recsTable.createdAt,
+      })
+      .from(recsTable)
+      .leftJoin(jobsTable, eq(recsTable.decisionJobId, jobsTable.id))
+      .where(and(
+        eq(recsTable.fieldId, fieldId),
+        ne(recsTable.feedbackStatus, 'pending')
+      ))
+      .orderBy(desc(recsTable.feedbackAt), desc(recsTable.createdAt))
+      .limit(limit)
+      .offset(offset),
+      
+    db
+      .select({ value: sql<number>`count(*)` })
+      .from(recsTable)
+      .leftJoin(jobsTable, eq(recsTable.decisionJobId, jobsTable.id))
+      .where(and(
+         eq(recsTable.fieldId, fieldId),
+         ne(recsTable.feedbackStatus, 'pending')
+      ))
+  ]);
+
+  return { rows, meta: buildPaginationMeta({ page, limit, offset }, Number(total)) };
 }
 
 /** All recommendations for a specific sub-block */

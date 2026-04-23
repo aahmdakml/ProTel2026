@@ -10,7 +10,9 @@ import { masterDataRouter }       from '@/modules/master-data/master-data.router
 import { ingestRouter }           from '@/modules/telemetry/ingest.router';
 import { recommendationsRouter }  from '@/modules/recommendations/recommendations.router';
 import { orthomosaicRouter }      from '@/modules/orthomosaic/orthomosaic.router';
+import { mapVisualRouter }        from '@/modules/map-visual/map-visual.router';
 import { archiveRouter }          from '@/modules/archive/archive.router';
+import { dashboardRouter }        from '@/modules/dashboard/dashboard.router';
 import { config } from '@/config';
 
 const app = express();
@@ -56,10 +58,12 @@ app.use(express.urlencoded({ extended: true }));
 // ---------------------------------------------------------------------------
 app.use('/health', healthRouter);
 app.use('/auth',   authRouter);
+app.use('/dashboard', dashboardRouter);
 app.use('/',       masterDataRouter);    // /fields, /sub-blocks, /devices, /crop-cycles, ...
 app.use('/ingest', ingestRouter);        // POST /ingest/batch
 app.use('/',       recommendationsRouter); // /fields/:id/recommendations, /alerts, ...
 app.use('/',       orthomosaicRouter);     // /fields/:id/orthomosaic, /map-layers, ...
+app.use('/',       mapVisualRouter);       // /fields/:id/map-visual, ...
 app.use('/',       archiveRouter);         // /crop-cycles/:id/complete, ...
 
 // ---------------------------------------------------------------------------

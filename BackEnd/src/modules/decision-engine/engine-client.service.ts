@@ -5,7 +5,6 @@ import {
   subBlocks as subBlocksTable,
   cropCycles as cropCyclesTable,
   irrigationRuleProfiles as ruleProfilesTable,
-  managementEvents as managementEventsTable,
   flowPaths as flowPathsTable,
   users as usersTable,
 } from '@/db/schema/mst';
@@ -13,6 +12,7 @@ import {
   decisionJobs as jobsTable,
   subBlockCurrentStates as currentStatesTable,
   irrigationRecommendations as recsTable,
+  managementEvents as managementEventsTable,
 } from '@/db/schema';
 import { getLatestForecast, getActiveWarnings } from '@/modules/weather/bmkg.service';
 import { buildFieldStates } from '@/modules/state-builder/state-builder.service';
@@ -224,7 +224,7 @@ export async function runDecisionCycleForField(
         } : null,
         management_flags: flags.map(f => ({
           event_type:  f.eventType,
-          flag_text:   f.flagText,
+          flag_text:   f.attentionFlagText,
           expires_at:  f.flagExpiresAt?.toISOString() ?? new Date().toISOString(),
         })),
         flow_paths: sbFlows.map(fp => ({
@@ -295,15 +295,15 @@ export async function runDecisionCycleForField(
         operatorWarningText: rec.operator_warning_text,
         validUntil,
         engineVersion:       result.engine_version,
-        status:              'active',
+        feedbackStatus:      'pending',
       }).onConflictDoNothing(); // idempotent re-runs
     }
 
     // 13. Mark job complete
     await db.update(jobsTable).set({
-      status:      'completed',
-      completedAt: new Date(),
-      recCount:    result.recommendations.length,
+      status:                    'completed',
+      completedAt:               new Date(),
+      recommendationsGenerated:  result.recommendations.length,
     }).where(eq(jobsTable.id, jobId));
 
     logger.info(

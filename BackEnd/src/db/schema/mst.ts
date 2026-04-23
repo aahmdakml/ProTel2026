@@ -6,6 +6,7 @@ import {
   timestamp,
   integer,
   numeric,
+  jsonb,
 } from 'drizzle-orm/pg-core';
 import { geometryPoint, geometryPolygon } from '../geometry';
 
@@ -67,6 +68,8 @@ export const fields = mst.table('fields', {
   decisionCycleMode:    text('decision_cycle_mode').notNull().default('normal'),
   isActive:             boolean('is_active').notNull().default(true),
   notes:                text('notes'),
+  mapVisualUrl:         text('map_visual_url'),
+  mapBounds:            jsonb('map_bounds'),
   createdAt:            timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt:            timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

@@ -26,6 +26,7 @@ import {
   CreateCropCycleSchema,
   UpdateCropCyclePhaseSchema,
   CreateRuleProfileSchema,
+  UpdateRuleProfileSchema,
 } from './master-data.schema';
 
 export const masterDataRouter = Router();
@@ -101,7 +102,7 @@ masterDataRouter.post(
   }),
 );
 
-// DELETE /fields/:fieldId/users/:userId — revoke akses user
+// DELETE /fields/:fieldId/users/:userId — revoke access
 masterDataRouter.delete(
   '/fields/:fieldId/users/:userId',
   requireAuth,
@@ -109,6 +110,17 @@ masterDataRouter.delete(
   h(async (req, res) => {
     await fieldsService.revokeUser(req.params['fieldId']!, req.params['userId']!);
     res.json(successResponse({ message: 'Akses dicabut' }));
+  }),
+);
+
+// DELETE /fields/:fieldId
+masterDataRouter.delete(
+  '/fields/:fieldId',
+  requireAuth,
+  requireSystemRole('system_admin'),
+  h(async (req, res) => {
+    await fieldsService.delete(req.params['fieldId']!);
+    res.json(successResponse({ message: 'Lahan berhasil dihapus' }));
   }),
 );
 
@@ -162,6 +174,27 @@ masterDataRouter.patch(
   }),
 );
 
+// GET /sub-blocks/:id
+masterDataRouter.get(
+  '/sub-blocks/:id',
+  requireAuth,
+  h(async (req, res) => {
+    const sb = await subBlocksService.getById(req.params['id']!);
+    res.json(successResponse(sb));
+  }),
+);
+
+// DELETE /sub-blocks/:id
+masterDataRouter.delete(
+  '/sub-blocks/:id',
+  requireAuth,
+  requireFieldAccess('manager'),
+  h(async (req, res) => {
+    await subBlocksService.delete(req.params['id']!);
+    res.json(successResponse({ message: 'Petak berhasil dihapus' }));
+  }),
+);
+
 // ===========================================================================
 // DEVICES  —  /fields/:fieldId/devices
 // ===========================================================================
@@ -197,6 +230,27 @@ masterDataRouter.patch(
   h(async (req, res) => {
     const dev = await devicesService.update(req.params['id']!, req.body);
     res.json(successResponse(dev));
+  }),
+);
+
+// GET /devices/:id
+masterDataRouter.get(
+  '/devices/:id',
+  requireAuth,
+  h(async (req, res) => {
+    const dev = await devicesService.getById(req.params['id']!);
+    res.json(successResponse(dev));
+  }),
+);
+
+// DELETE /devices/:id
+masterDataRouter.delete(
+  '/devices/:id',
+  requireAuth,
+  requireFieldAccess('manager'),
+  h(async (req, res) => {
+    await devicesService.delete(req.params['id']!);
+    res.json(successResponse({ message: 'Perangkat berhasil dihapus' }));
   }),
 );
 
@@ -307,16 +361,33 @@ masterDataRouter.patch(
   }),
 );
 
-// POST /crop-cycles/:id/complete — selesaikan panen
+// POST /crop-cycles/:id/complete — tandai panen/selesai
 masterDataRouter.post(
   '/crop-cycles/:id/complete',
   requireAuth,
   h(async (req, res) => {
-    const cc = await cropCyclesService.complete(
-      req.params['id']!,
-      req.body.actual_harvest_date as string | undefined,
-    );
+    const cc = await cropCyclesService.complete(req.params['id']!, req.body.actual_harvest_date);
     res.json(successResponse(cc));
+  }),
+);
+
+// GET /crop-cycles/:id
+masterDataRouter.get(
+  '/crop-cycles/:id',
+  requireAuth,
+  h(async (req, res) => {
+    const cc = await cropCyclesService.getById(req.params['id']!);
+    res.json(successResponse(cc));
+  }),
+);
+
+// DELETE /crop-cycles/:id
+masterDataRouter.delete(
+  '/crop-cycles/:id',
+  requireAuth,
+  h(async (req, res) => {
+    await cropCyclesService.delete(req.params['id']!);
+    res.json(successResponse({ message: 'Siklus tanam dihapus' }));
   }),
 );
 
@@ -334,7 +405,7 @@ masterDataRouter.get(
   }),
 );
 
-// POST /rule-profiles — system_admin only
+// POST /rule-profiles
 masterDataRouter.post(
   '/rule-profiles',
   requireAuth,
@@ -343,5 +414,38 @@ masterDataRouter.post(
   h(async (req, res) => {
     const profile = await ruleProfilesService.create(req.body, req.user!.id);
     res.status(201).json(successResponse(profile));
+  }),
+);
+
+// GET /rule-profiles/:id
+masterDataRouter.get(
+  '/rule-profiles/:id',
+  requireAuth,
+  h(async (req, res) => {
+    const profile = await ruleProfilesService.getById(req.params['id']!);
+    res.json(successResponse(profile));
+  }),
+);
+
+// PATCH /rule-profiles/:id
+masterDataRouter.patch(
+  '/rule-profiles/:id',
+  requireAuth,
+  requireSystemRole('system_admin'),
+  validate(UpdateRuleProfileSchema),
+  h(async (req, res) => {
+    const profile = await ruleProfilesService.update(req.params['id']!, req.body);
+    res.json(successResponse(profile));
+  }),
+);
+
+// DELETE /rule-profiles/:id
+masterDataRouter.delete(
+  '/rule-profiles/:id',
+  requireAuth,
+  requireSystemRole('system_admin'),
+  h(async (req, res) => {
+    await ruleProfilesService.delete(req.params['id']!);
+    res.json(successResponse({ message: 'Profil aturan dihapus' }));
   }),
 );

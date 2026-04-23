@@ -131,7 +131,7 @@ export const UpdateCropCyclePhaseSchema = z.object({
   current_phase_code: z.enum([
     'land_prep', 'nursery', 'transplanting',
     'vegetative_early', 'vegetative_late',
-    'reproductive', 'ripening', 'harvest',
+    'reproductive', 'ripening', 'harvesting', 'harvested',
   ]),
   rule_profile_id: z.string().uuid().optional(),
   notes:           z.string().max(500).optional(),

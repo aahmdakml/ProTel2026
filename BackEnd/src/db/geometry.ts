@@ -12,7 +12,7 @@ export const geometryPoint = customType<{
   driverData: string;
 }>({
   dataType() {
-    return 'geometry(POINT, 4326)';
+    return 'text';
   },
   fromDriver: (v: string) => v,
   toDriver: (v: string) => v,
@@ -24,7 +24,7 @@ export const geometryPolygon = customType<{
   driverData: string;
 }>({
   dataType() {
-    return 'geometry(POLYGON, 4326)';
+    return 'text';
   },
   fromDriver: (v: string) => v,
   toDriver: (v: string) => v,
@@ -36,7 +36,7 @@ export const geometry = customType<{
   driverData: string;
 }>({
   dataType() {
-    return 'geometry';
+    return 'text';
   },
   fromDriver: (v: string) => v,
   toDriver: (v: string) => v,

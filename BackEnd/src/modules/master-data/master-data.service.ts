@@ -170,6 +170,12 @@ export const fieldsService = {
         eq(userFieldsTable.userId, userId),
       ));
   },
+
+  async delete(fieldId: string) {
+    await db.update(fieldsTable)
+      .set({ isActive: false, updatedAt: new Date() })
+      .where(eq(fieldsTable.id, fieldId));
+  },
 };
 
 // ===========================================================================
@@ -193,21 +199,21 @@ export const subBlocksService = {
   },
 
   async create(fieldId: string, input: CreateSubBlockInput) {
-    // Insert dengan PostGIS geometry — gunakan raw SQL untuk ST_GeomFromGeoJSON
     const geomJson = JSON.stringify(input.polygon_geom);
-    const result = await pool.query<{ id: string }>(
-      `INSERT INTO mst.sub_blocks
-         (field_id, name, code, polygon_geom, elevation_m, soil_type, display_order, notes)
-       VALUES
-         ($1, $2, $3, ST_GeomFromGeoJSON($4)::geometry(POLYGON,4326), $5, $6, $7, $8)
-       RETURNING id`,
-      [
-        fieldId, input.name, input.code ?? null, geomJson,
-        input.elevation_m ?? null, input.soil_type ?? null,
-        input.display_order, input.notes ?? null,
-      ],
-    );
-    return this.getById(result.rows[0]!.id);
+    
+    const [inserted] = await db.insert(subBlocksTable).values({
+      fieldId,
+      name:         input.name,
+      code:         input.code,
+      polygonGeom:  geomJson,
+      elevationM:   input.elevation_m?.toString(),
+      soilType:     input.soil_type,
+      displayOrder: input.display_order,
+      notes:        input.notes,
+    }).returning();
+
+    if (!inserted) throw new AppError(500, 'CREATE_FAILED', 'Gagal membuat sub-block');
+    return inserted;
   },
 
   async update(subBlockId: string, input: UpdateSubBlockInput) {
@@ -237,18 +243,23 @@ export const subBlocksService = {
       const code   = input.code_field ? String(props[input.code_field] ?? '') : undefined;
       const geomJson = JSON.stringify(feature.geometry);
 
-      const result = await pool.query<{ id: string }>(
-        `INSERT INTO mst.sub_blocks
-           (field_id, name, code, polygon_geom)
-         VALUES
-           ($1, $2, $3, ST_GeomFromGeoJSON($4)::geometry(POLYGON,4326))
-         RETURNING id`,
-        [fieldId, name, code ?? null, geomJson],
-      );
-      insertedIds.push(result.rows[0]!.id);
+      const [inserted] = await db.insert(subBlocksTable).values({
+        fieldId,
+        name,
+        code,
+        polygonGeom: geomJson,
+      }).returning();
+
+      if (inserted) insertedIds.push(inserted.id);
     }
 
     return { inserted: insertedIds.length, ids: insertedIds };
+  },
+
+  async delete(subBlockId: string) {
+    await db.update(subBlocksTable)
+      .set({ isActive: false, updatedAt: new Date() })
+      .where(eq(subBlocksTable.id, subBlockId));
   },
 };
 
@@ -366,6 +377,10 @@ export const devicesService = {
 
     return cal!;
   },
+
+  async delete(deviceId: string) {
+    await db.delete(devicesTable).where(eq(devicesTable.id, deviceId));
+  },
 };
 
 // ===========================================================================
@@ -469,7 +484,7 @@ export const cropCyclesService = {
     const [updated] = await db.update(cropCyclesTable)
       .set({
         status:             'completed',
-        currentPhaseCode:   'harvest',
+        currentPhaseCode:   'harvested',
         actualHarvestDate:  actualHarvestDate,
         completedAt:        new Date(),
         updatedAt:          new Date(),
@@ -478,6 +493,16 @@ export const cropCyclesService = {
       .returning();
     if (!updated) throw new AppError(404, 'CROP_CYCLE_NOT_FOUND', 'Crop cycle tidak ditemukan');
     return updated;
+  },
+
+  async getById(id: string) {
+    const [cc] = await db.select().from(cropCyclesTable).where(eq(cropCyclesTable.id, id)).limit(1);
+    if (!cc) throw new AppError(404, 'CROP_CYCLE_NOT_FOUND', 'Crop cycle tidak ditemukan');
+    return cc;
+  },
+
+  async delete(id: string) {
+    await db.delete(cropCyclesTable).where(eq(cropCyclesTable.id, id));
   },
 };
 
@@ -516,5 +541,40 @@ export const ruleProfilesService = {
       createdBy,
     }).returning();
     return profile!;
+  },
+
+  async getById(id: string) {
+    const [profile] = await db.select().from(ruleProfilesTable).where(eq(ruleProfilesTable.id, id)).limit(1);
+    if (!profile) throw new AppError(404, 'RULE_PROFILE_NOT_FOUND', 'Profil aturan tidak ditemukan');
+    return profile;
+  },
+
+  async update(id: string, input: Partial<CreateRuleProfileInput>) {
+    const [updated] = await db.update(ruleProfilesTable)
+      .set({
+        ...(input.name !== undefined && { name: input.name }),
+        ...(input.description !== undefined && { description: input.description }),
+        ...(input.bucket_code !== undefined && { bucketCode: input.bucket_code }),
+        ...(input.phase_code !== undefined && { phaseCode: input.phase_code }),
+        ...(input.awd_lower_threshold_cm !== undefined && { awdLowerThresholdCm: input.awd_lower_threshold_cm.toString() }),
+        ...(input.awd_upper_target_cm !== undefined && { awdUpperTargetCm: input.awd_upper_target_cm.toString() }),
+        ...(input.drought_alert_cm !== undefined && { droughtAlertCm: input.drought_alert_cm?.toString() }),
+        ...(input.min_saturation_days !== undefined && { minSaturationDays: input.min_saturation_days }),
+        ...(input.rain_delay_mm !== undefined && { rainDelayMm: input.rain_delay_mm.toString() }),
+        ...(input.priority_weight !== undefined && { priorityWeight: input.priority_weight.toString() }),
+        ...(input.rainfed_modifier_pct !== undefined && { rainfedModifierPct: input.rainfed_modifier_pct.toString() }),
+        ...(input.target_confidence !== undefined && { targetConfidence: input.target_confidence }),
+        ...(input.is_default !== undefined && { isDefault: input.is_default }),
+        updatedAt: new Date(),
+      })
+      .where(eq(ruleProfilesTable.id, id))
+      .returning();
+    return updated!;
+  },
+
+  async delete(id: string) {
+    await db.update(ruleProfilesTable)
+      .set({ isActive: false, updatedAt: new Date() })
+      .where(eq(ruleProfilesTable.id, id));
   },
 };
