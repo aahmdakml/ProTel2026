@@ -63,7 +63,7 @@ export const CreateSubBlockSchema = z.object({
   notes:         z.string().max(2000).optional(),
 });
 
-export const UpdateSubBlockSchema = CreateSubBlockSchema.omit({ polygon_geom: true }).partial();
+export const UpdateSubBlockSchema = CreateSubBlockSchema.partial();
 
 export const ImportSubBlocksSchema = z.object({
   geojson:     GeoJsonFeatureCollectionSchema,

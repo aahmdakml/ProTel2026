@@ -24,6 +24,13 @@ export const TokenResponseSchema = z.object({
   expires_in:    z.number(), // seconds
 });
 
-export type LoginInput     = z.infer<typeof LoginSchema>;
-export type RefreshInput   = z.infer<typeof RefreshSchema>;
-export type TokenResponse  = z.infer<typeof TokenResponseSchema>;
+export const UpdateProfileSchema = z.object({
+  fullName: z.string().min(1, 'Nama lengkap wajib diisi').optional(),
+  email: z.string().email('Format email tidak valid').optional(),
+  password: z.string().min(6, 'Password minimal 6 karakter').optional(),
+});
+
+export type LoginInput         = z.infer<typeof LoginSchema>;
+export type RefreshInput       = z.infer<typeof RefreshSchema>;
+export type TokenResponse      = z.infer<typeof TokenResponseSchema>;
+export type UpdateProfileInput = z.infer<typeof UpdateProfileSchema>;

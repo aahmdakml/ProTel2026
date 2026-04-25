@@ -264,3 +264,16 @@ export const mapLayers = mst.table('map_layers', {
   createdAt:        timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt:        timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ---------------------------------------------------------------------------
+// mst.system_settings
+// ---------------------------------------------------------------------------
+export const systemSettings = mst.table('system_settings', {
+  id:                 text('id').primaryKey().default('global'),
+  organizationName:   text('organization_name').notNull().default('Smart AWD Farm'),
+  organizationLogo:   text('organization_logo'),
+  measurementUnits:   text('measurement_units').notNull().default('metric'),
+  cloudflareApiUrl:   text('cloudflare_api_url'),
+  cloudflareApiKey:   text('cloudflare_api_key'),
+  updatedAt:          timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});

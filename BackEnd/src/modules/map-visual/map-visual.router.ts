@@ -17,7 +17,7 @@ const h = (fn: (req: Request, res: Response) => Promise<unknown>) =>
 
 const MapVisualUploadSchema = z.object({
   filename:     z.string().min(1),
-  content_type: z.string().regex(/^image\/(png|jpeg|jpg|webp)$/),
+  content_type: z.string().regex(/^image\/(png|jpeg|jpg|webp|tiff|x-tiff|tif)$/),
 });
 
 const MapBoundsSchema = z.object({
@@ -27,6 +27,9 @@ const MapBoundsSchema = z.object({
 // ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
+
+import fs from 'fs';
+import path from 'path';
 
 // POST /fields/:id/map-visual/upload-url
 mapVisualRouter.post(
@@ -41,6 +44,32 @@ mapVisualRouter.post(
       req.body.content_type,
     );
     res.json(successResponse(result));
+  }),
+);
+
+// PUT /fields/:id/map-visual/local-upload
+mapVisualRouter.put(
+  '/fields/:id/map-visual/local-upload',
+  h(async (req, res) => {
+    const fieldId = req.params['id'];
+    const filename = (req.query.filename as string) || 'visual.png';
+
+    const uploadDir = path.join(process.cwd(), 'uploads', 'map-visuals', fieldId);
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+
+    const filePath = path.join(uploadDir, filename);
+    const fileStream = fs.createWriteStream(filePath);
+
+    req.pipe(fileStream);
+
+    await new Promise((resolve, reject) => {
+      fileStream.on('finish', () => resolve(true));
+      fileStream.on('error', (err) => reject(err));
+    });
+
+    res.json({ success: true, message: 'Local upload complete' });
   }),
 );
 

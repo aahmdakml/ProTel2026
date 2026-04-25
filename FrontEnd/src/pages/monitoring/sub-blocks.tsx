@@ -20,6 +20,7 @@ interface SubBlock {
   elevationM: string | null;
   soilType: string | null;
   isActive: boolean;
+  polygonGeom?: any;
 }
 
 export function SubBlocksPage() {
@@ -182,7 +183,18 @@ export function SubBlocksPage() {
                 <tbody className="divide-y">
                   {filteredSubBlocks.map((sb) => (
                     <tr key={sb.id} className="hover:bg-muted/30 transition-colors">
-                      <td className="px-6 py-4 font-medium text-foreground">{sb.name}</td>
+                      <td className="px-6 py-4 font-medium text-foreground flex items-center gap-2">
+                        {sb.name}
+                        {sb.polygonGeom ? (
+                          <Badge variant="outline" className="text-[10px] bg-green-500/10 text-green-600 border-green-500/20 py-0 px-1 h-5 flex items-center gap-0.5">
+                            <MapPin className="h-3 w-3" /> Terpetakan
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20 py-0 px-1 h-5 flex items-center gap-0.5">
+                            <AlertTriangle className="h-3 w-3" /> No Map
+                          </Badge>
+                        )}
+                      </td>
                       <td className="px-6 py-4 code font-mono text-xs">{sb.code || '-'}</td>
                       <td className="px-6 py-4">{sb.elevationM ? `${sb.elevationM} m` : '-'}</td>
                       <td className="px-6 py-4 capitalize">{sb.soilType || '-'}</td>
@@ -229,18 +241,20 @@ export function SubBlocksPage() {
         </CardContent>
       </Card>
 
-      <CreateSubBlockModal 
-        isOpen={isModalOpen} 
-        fieldId={selectedFieldId}
-        initialData={editingSubBlock}
-        onClose={() => {
-          setIsModalOpen(false);
-          setEditingSubBlock(null);
-        }} 
-        onSuccess={() => {
-          if (selectedFieldId) fetchSubBlocks(selectedFieldId);
-        }}
-      />
+      {isModalOpen && (
+        <CreateSubBlockModal 
+          isOpen={isModalOpen} 
+          fieldId={selectedFieldId}
+          initialData={editingSubBlock}
+          onClose={() => {
+            setIsModalOpen(false);
+            setEditingSubBlock(null);
+          }} 
+          onSuccess={() => {
+            if (selectedFieldId) fetchSubBlocks(selectedFieldId);
+          }}
+        />
+      )}
 
       <EntityDetailModal 
         isOpen={!!detailEntity} 

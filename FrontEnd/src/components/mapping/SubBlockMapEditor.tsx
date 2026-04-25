@@ -21,11 +21,12 @@ interface SubBlockMapEditorProps {
     mapVisualUrl: string | null;
     mapBounds: number[][] | null;
   };
+  existingPolygon?: any;
   onSave: (geojson: any) => void;
   onClose: () => void;
 }
 
-export function SubBlockMapEditor({ field, onSave, onClose }: SubBlockMapEditorProps) {
+export function SubBlockMapEditor({ field, existingPolygon, onSave, onClose }: SubBlockMapEditorProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const [map, setMap] = useState<Map | null>(null);
   const vectorSource = useRef(new VectorSource());
@@ -35,15 +36,43 @@ export function SubBlockMapEditor({ field, onSave, onClose }: SubBlockMapEditorP
   useEffect(() => {
     if (!mapRef.current) return;
 
-    // Base Layers
-    const layers: any[] = [
-      new TileLayer({ source: new OSM() })
-    ];
+    if (existingPolygon) {
+      try {
+        const geom = typeof existingPolygon === 'string' 
+          ? JSON.parse(existingPolygon) 
+          : existingPolygon;
+          
+        const geojsonFormat = new GeoJSON();
+        const feature = geojsonFormat.readFeatures(
+          {
+            type: 'Feature',
+            geometry: geom,
+            properties: {},
+          },
+          {
+            dataProjection: 'EPSG:4326',
+            featureProjection: 'EPSG:3857',
+          }
+        );
+        vectorSource.current.clear();
+        vectorSource.current.addFeatures(Array.isArray(feature) ? feature : [feature]);
+      } catch (e) {
+        console.error("Failed to parse existing polygon in editor", e);
+      }
+    }
+    if (!mapRef.current) return;
 
-    // Image Layer if georeferenced
-    if (field.mapVisualUrl && field.mapBounds) {
+    // Base Layers
+    const layers: any[] = [];
+    if (!field.mapVisualUrl) {
+      layers.push(new TileLayer({ source: new OSM() }));
+    }
+
+    // Image Layer
+    if (field.mapVisualUrl) {
+      const bounds = field.mapBounds || [[ -6.2100, 106.8100], [-6.2110, 106.8110]];
       const extent = transformExtent(
-        [field.mapBounds[0][1], field.mapBounds[1][0], field.mapBounds[1][1], field.mapBounds[0][0]],
+        [bounds[0][1], bounds[1][0], bounds[1][1], bounds[0][0]],
         'EPSG:4326',
         'EPSG:3857'
       );
@@ -74,9 +103,10 @@ export function SubBlockMapEditor({ field, onSave, onClose }: SubBlockMapEditorP
     });
 
     // Zoom to visual if exists
-    if (field.mapBounds) {
+    if (field.mapVisualUrl) {
+        const bounds = field.mapBounds || [[ -6.2100, 106.8100], [-6.2110, 106.8110]];
         const extent = transformExtent(
-            [field.mapBounds[0][1], field.mapBounds[1][0], field.mapBounds[1][1], field.mapBounds[0][0]],
+            [bounds[0][1], bounds[1][0], bounds[1][1], bounds[0][0]],
             'EPSG:4326',
             'EPSG:3857'
         );

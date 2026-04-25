@@ -217,13 +217,14 @@ export const subBlocksService = {
   },
 
   async update(subBlockId: string, input: UpdateSubBlockInput) {
-    const setParts: Record<string, unknown> = { updated_at: new Date() };
+    const setParts: Record<string, unknown> = { updatedAt: new Date() };
     if (input.name          !== undefined) setParts['name']          = input.name;
     if (input.code          !== undefined) setParts['code']          = input.code;
-    if (input.elevation_m   !== undefined) setParts['elevation_m']   = input.elevation_m;
-    if (input.soil_type     !== undefined) setParts['soil_type']     = input.soil_type;
-    if (input.display_order !== undefined) setParts['display_order'] = input.display_order;
+    if (input.elevation_m   !== undefined) setParts['elevationM']    = input.elevation_m;
+    if (input.soil_type     !== undefined) setParts['soilType']      = input.soil_type;
+    if (input.display_order !== undefined) setParts['displayOrder']  = input.display_order;
     if (input.notes         !== undefined) setParts['notes']         = input.notes;
+    if (input.polygon_geom  !== undefined) setParts['polygonGeom']   = JSON.stringify(input.polygon_geom);
 
     const [updated] = await db.update(subBlocksTable)
       .set(setParts as Parameters<typeof db.update>[0] extends never ? never : Record<string, unknown>)

@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { validate } from '@/middleware/validate.middleware';
 import { requireAuth } from '@/middleware/auth.middleware';
 import { authService } from './auth.service';
-import { LoginSchema, RefreshSchema } from './auth.schema';
+import { LoginSchema, RefreshSchema, UpdateProfileSchema } from './auth.schema';
 import { successResponse } from '@/shared/utils/response.util';
 
 export const authRouter = Router();
@@ -75,6 +75,26 @@ authRouter.get(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const user = await authService.getMe(req.user!.id);
+      res.json(successResponse(user));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// PATCH /auth/me
+// Header: Authorization: Bearer <access_token>
+// Body: { fullName, email, password }
+// Response: updated user profile
+// ---------------------------------------------------------------------------
+authRouter.patch(
+  '/me',
+  requireAuth,
+  validate(UpdateProfileSchema),
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const user = await authService.updateMe(req.user!.id, req.body);
       res.json(successResponse(user));
     } catch (err) {
       next(err);

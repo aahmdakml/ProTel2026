@@ -13,14 +13,27 @@ import { orthomosaicRouter }      from '@/modules/orthomosaic/orthomosaic.router
 import { mapVisualRouter }        from '@/modules/map-visual/map-visual.router';
 import { archiveRouter }          from '@/modules/archive/archive.router';
 import { dashboardRouter }        from '@/modules/dashboard/dashboard.router';
+import { systemSettingsRouter }   from '@/modules/system-settings/system-settings.router';
+import { telemetryQueryRouter }  from '@/modules/telemetry/query.router';
 import { config } from '@/config';
+import fs from 'fs';
+import path from 'path';
 
 const app = express();
+
+// Pastikan direktori uploads ada
+const uploadsDir = path.join(process.cwd(), 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+app.use('/uploads', express.static(uploadsDir));
 
 // ---------------------------------------------------------------------------
 // Security headers
 // ---------------------------------------------------------------------------
-app.use(helmet());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
 
 // ---------------------------------------------------------------------------
 // CORS
@@ -59,8 +72,10 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/health', healthRouter);
 app.use('/auth',   authRouter);
 app.use('/dashboard', dashboardRouter);
+app.use('/system-settings', systemSettingsRouter);
 app.use('/',       masterDataRouter);    // /fields, /sub-blocks, /devices, /crop-cycles, ...
 app.use('/ingest', ingestRouter);        // POST /ingest/batch
+app.use('/telemetry', telemetryQueryRouter); // GET /telemetry/sub-blocks/:subBlockId/history
 app.use('/',       recommendationsRouter); // /fields/:id/recommendations, /alerts, ...
 app.use('/',       orthomosaicRouter);     // /fields/:id/orthomosaic, /map-layers, ...
 app.use('/',       mapVisualRouter);       // /fields/:id/map-visual, ...

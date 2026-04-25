@@ -13,6 +13,8 @@ import { CyclesPage } from './pages/master/cycles';
 import { RulesPage } from './pages/master/rules';
 
 import { MapPage } from './pages/monitoring/map';
+import { ProfilePage } from './pages/profile';
+import { SettingsPage } from './pages/settings';
 
 function App() {
   return (
@@ -31,7 +33,8 @@ function App() {
             <Route path="/master/cycles" element={<CyclesPage />} />
             <Route path="/master/rules" element={<RulesPage />} />
             <Route path="/master/devices" element={<DevicesPage />} />
-            <Route path="/settings" element={<div>System Settings</div>} />
+            <Route path="/profile" element={<ProfilePage />} />
+            <Route path="/settings" element={<SettingsPage />} />
           </Route>
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

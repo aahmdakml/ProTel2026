@@ -219,4 +219,26 @@ export const authService = {
 
     return user;
   },
+
+  // ── PATCH /auth/me ────────────────────────────────────────────────────────
+  async updateMe(userId: string, input: any) {
+    console.log('updateMe input payload is:', input);
+    const updateData: any = {};
+    if (input.fullName) updateData.fullName = input.fullName;
+    if (input.email) updateData.email = input.email.toLowerCase().trim();
+    if (input.password) {
+      updateData.passwordHash = await bcrypt.hash(input.password, 10);
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return this.getMe(userId);
+    }
+
+    await db
+      .update(usersTable)
+      .set(updateData)
+      .where(eq(usersTable.id, userId));
+
+    return this.getMe(userId);
+  },
 };

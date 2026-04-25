@@ -60,10 +60,19 @@ export function CreateSubBlockModal({ isOpen, fieldId, initialData, onClose, onS
     setLoading(true);
 
     try {
+      let parsedGeom = polygonGeom;
+      if (typeof polygonGeom === 'string') {
+        try {
+          parsedGeom = JSON.parse(polygonGeom);
+        } catch (e) {
+          console.error("Failed to parse polygon geom", e);
+        }
+      }
+
       const payload = {
         ...formData,
         elevation_m: formData.elevation_m === '' ? undefined : formData.elevation_m,
-        polygon_geom: polygonGeom
+        polygon_geom: parsedGeom
       };
       
       if (initialData?.id) {
@@ -175,17 +184,6 @@ export function CreateSubBlockModal({ isOpen, fieldId, initialData, onClose, onS
             </p>
           </div>
 
-          {isMapEditorOpen && fieldData && (
-            <SubBlockMapEditor 
-              field={fieldData}
-              onClose={() => setIsMapEditorOpen(false)}
-              onSave={(geojson) => {
-                setPolygonGeom(geojson);
-                setIsMapEditorOpen(false);
-              }}
-            />
-          )}
-
           <div className="flex justify-end space-x-2 pt-4 border-t mt-6">
             <Button type="button" variant="outline" onClick={onClose} disabled={loading}>
               Batal
@@ -196,6 +194,18 @@ export function CreateSubBlockModal({ isOpen, fieldId, initialData, onClose, onS
             </Button>
           </div>
         </form>
+
+        {isMapEditorOpen && fieldData && (
+          <SubBlockMapEditor 
+            field={fieldData}
+            existingPolygon={polygonGeom}
+            onClose={() => setIsMapEditorOpen(false)}
+            onSave={(geojson) => {
+              setPolygonGeom(geojson);
+              setIsMapEditorOpen(false);
+            }}
+          />
+        )}
       </div>
     </div>
   );

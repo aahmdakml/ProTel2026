@@ -1,8 +1,8 @@
-import { db, testConnection } from '../db/client';
+import { db, testConnection } from '@/db/client';
 import { 
   users, fields, subBlocks, devices, deviceAssignments,
   decisionJobs, irrigationRecommendations, telemetryAlerts 
-} from '../db/schema';
+} from '@/db/schema';
 import { randomUUID } from 'crypto';
 
 async function seed() {

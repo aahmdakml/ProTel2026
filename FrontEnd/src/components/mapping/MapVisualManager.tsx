@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Upload, Map as MapIcon, X, Check, Loader2 } from 'lucide-react';
+import { Upload, Map as MapIcon, Check, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { apiClient } from '@/api/client';
 import axios from 'axios';
@@ -16,9 +16,7 @@ export function MapVisualManager({ fieldId, initialVisualUrl, initialBounds, onS
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   
-  const [bounds, setBounds] = useState<string>(
-    initialBounds ? JSON.stringify(initialBounds) : '[[ -6.2100, 106.8100], [-6.2110, 106.8110]]'
-  );
+  const bounds = initialBounds ? JSON.stringify(initialBounds) : '[[ -6.2100, 106.8100], [-6.2110, 106.8110]]';
 
   const handleUpload = async () => {
     if (!file) return;
@@ -88,27 +86,16 @@ export function MapVisualManager({ fieldId, initialVisualUrl, initialBounds, onS
                 <div className="flex flex-col items-center justify-center pt-5 pb-6">
                   <Upload className="w-8 h-8 mb-2 text-muted-foreground" />
                   <p className="text-xs text-muted-foreground">
-                    {file ? file.name : "Upload Orthophoto (PNG/JPG)"}
+                    {file ? file.name : "Upload Orthophoto (PNG/JPG/JPEG/TIF)"}
                   </p>
                 </div>
                 <input 
                   type="file" 
                   className="hidden" 
-                  accept="image/png,image/jpeg"
+                  accept="image/png,image/jpeg,image/jpg,image/tiff,image/x-tiff,.tif,.tiff"
                   onChange={(e) => setFile(e.target.files?.[0] || null)}
                 />
               </label>
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[10px] font-bold uppercase text-muted-foreground">Koordinat Pembatas (Georeference)</label>
-              <input 
-                value={bounds}
-                onChange={(e) => setBounds(e.target.value)}
-                className="w-full h-9 rounded-md border bg-background px-3 text-xs font-mono"
-                placeholder="[[top, left], [bottom, right]]"
-              />
-              <p className="text-[10px] text-muted-foreground italic">Contoh: [[-6.2100, 106.8100], [-6.2110, 106.8110]]</p>
             </div>
 
             {error && <p className="text-xs text-destructive">{error}</p>}

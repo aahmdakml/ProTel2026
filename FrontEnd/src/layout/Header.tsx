@@ -59,7 +59,7 @@ export function Header() {
               <div className="py-1">
                 <button
                   className="flex w-full items-center px-4 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                  onClick={() => {/* Navigate to profile */ setShowProfileMenu(false)}}
+                  onClick={() => { navigate('/profile'); setShowProfileMenu(false); }}
                 >
                   <User className="mr-2 h-4 w-4" />
                   Profile
