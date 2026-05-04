@@ -15,6 +15,7 @@ import { RulesPage } from './pages/master/rules';
 import { MapPage } from './pages/monitoring/map';
 import { ProfilePage } from './pages/profile';
 import { SettingsPage } from './pages/settings';
+import { TasksPage } from './pages/tasks';
 
 function App() {
   return (
@@ -35,6 +36,7 @@ function App() {
             <Route path="/master/devices" element={<DevicesPage />} />
             <Route path="/profile" element={<ProfilePage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/tasks" element={<TasksPage />} />
           </Route>
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

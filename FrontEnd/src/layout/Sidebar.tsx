@@ -15,7 +15,8 @@ import {
   FileSpreadsheet,
   RefreshCw,
   Layers,
-  Sprout
+  Sprout,
+  ClipboardList
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -61,6 +62,11 @@ const navigation: NavItem[] = [
       { title: 'Siklus Tanam', href: '/master/cycles', icon: RefreshCw },
       { title: 'Hardware Device', href: '/master/devices', icon: Cpu },
     ],
+  },
+  {
+    title: 'Penugasan',
+    href: '/tasks',
+    icon: ClipboardList,
   },
   {
     title: 'Settings',
