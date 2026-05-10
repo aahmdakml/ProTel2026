@@ -122,6 +122,7 @@ CREATE TABLE mst.fields (
   is_active              BOOLEAN     NOT NULL DEFAULT TRUE,
   notes                  TEXT,
   map_visual_url         TEXT,
+  map_bounds             JSONB,
   created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at             TIMESTAMPTZ NOT NULL DEFAULT now()
 );
