@@ -121,6 +121,7 @@ CREATE TABLE mst.fields (
                                      -- normal=60menit, siaga=30menit
   is_active              BOOLEAN     NOT NULL DEFAULT TRUE,
   notes                  TEXT,
+  map_visual_url         TEXT,
   created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at             TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -978,6 +979,11 @@ CREATE TABLE trx.irrigation_recommendations (
   weather_context_json        JSONB,        -- snapshot BMKG yang dipakai DSS
   active_warnings_json        JSONB,        -- snapshot weather warnings yang aktif saat itu
   rule_profile_id             UUID               REFERENCES mst.irrigation_rule_profiles(id),
+  -- Feedback
+  feedback_status             TEXT          NOT NULL DEFAULT 'pending',
+  operator_notes              TEXT,
+  feedback_by                 UUID               REFERENCES mst.users(id),
+  feedback_at                 TIMESTAMPTZ,
   -- Feedback summary cache (detail di trx.recommendation_feedback)
   has_feedback                BOOLEAN       NOT NULL DEFAULT FALSE,
   last_feedback_at            TIMESTAMPTZ,
