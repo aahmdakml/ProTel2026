@@ -362,6 +362,10 @@ Database menggunakan 4 schema PostgreSQL:
 
 ## 🚨 Troubleshooting
 
+**Error: extension "postgis" is not available**
+→ Ini terjadi karena database PostgreSQL Anda tidak memiliki komponen PostGIS.
+→ **Solusi**: Sangat disarankan menggunakan Docker (`docker-compose up -d`). File `docker-compose.yml` yang saya tambahkan sudah menggunakan image yang mencakup PostGIS dan TimescaleDB secara otomatis.
+
 **Schema "mst" sudah ada saat `db:migrate`**
 ```bash
 # Gunakan reset (DEV) atau skip jika sudah punya data

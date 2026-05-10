@@ -888,9 +888,7 @@ CREATE TABLE trx.management_events (
   dosage_notes        TEXT,
   attention_flag_text TEXT,       -- teks peringatan yang muncul di rekomendasi DSS
   flag_active_hours   INTEGER     NOT NULL DEFAULT 48,
-  flag_expires_at     TIMESTAMPTZ NOT NULL GENERATED ALWAYS AS (
-                        (event_date::TIMESTAMPTZ + (flag_active_hours || ' hours')::INTERVAL)
-                      ) STORED,   -- auto-generated
+  flag_expires_at     TIMESTAMPTZ NOT NULL,
   reported_by         UUID             REFERENCES mst.users(id),
   notes               TEXT,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -902,7 +900,7 @@ CREATE TRIGGER trg_management_events_updated_at BEFORE UPDATE ON trx.management_
 CREATE INDEX idx_mgmt_events_field_id     ON trx.management_events(field_id);
 CREATE INDEX idx_mgmt_events_sub_block_id ON trx.management_events(sub_block_id);
 CREATE INDEX idx_mgmt_events_active_flags
-  ON trx.management_events(field_id, flag_expires_at) WHERE flag_expires_at > now();
+  ON trx.management_events(field_id, flag_expires_at);
 
 -- ---------------------------------------------------------------------------
 -- trx.telemetry_alerts   ← REAL-TIME THRESHOLD ALERTS
@@ -990,7 +988,7 @@ COMMENT ON TABLE trx.irrigation_recommendations IS
 CREATE INDEX idx_recommendations_field_generated    ON trx.irrigation_recommendations(field_id, generated_at DESC);
 CREATE INDEX idx_recommendations_sub_block_valid    ON trx.irrigation_recommendations(sub_block_id, valid_until DESC);
 CREATE INDEX idx_recommendations_active
-  ON trx.irrigation_recommendations(field_id, valid_until)  WHERE valid_until > now();
+  ON trx.irrigation_recommendations(field_id, valid_until);
 CREATE INDEX idx_recommendations_decision_job
   ON trx.irrigation_recommendations(decision_job_id)        WHERE decision_job_id IS NOT NULL;
 

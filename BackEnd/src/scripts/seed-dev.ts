@@ -108,16 +108,16 @@ async function seedDev() {
           (id, field_id, sub_block_id, decision_job_id, generated_at, valid_until,
            recommendation_type, priority_rank, priority_score,
            command_template_code, command_text, reason_summary,
-           confidence_level, water_level_cm_at_decision, feedback_status)
+           confidence_level, water_level_cm_at_decision)
         VALUES
           ($1,$2,$3,$4,now(), now()+interval '24h', 'irrigate',1,'85.5','IRR_START',
            'Nyalakan Pompa Air selama 3 jam',
            'Elevasi air mencapai batas bawah -15cm, fase vegetatif memerlukan genangan 2cm.',
-           'high','-15.2','pending'),
+           'high','-15.2'),
           ($5,$2,$6,$4,now(), now()+interval '24h', 'observe',2,'40.0','MAINTAIN',
            'Pertahankan Kondisi Saat Ini',
            'Tingkat air (5cm) ideal untuk menghambat gulma.',
-           'medium','5.0','pending')
+           'medium','5.0')
         ON CONFLICT DO NOTHING
       `, [randomUUID(), fieldId, sbA, jobId, randomUUID(), sbB]);
     }
