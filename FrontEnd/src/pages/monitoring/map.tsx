@@ -13,8 +13,8 @@ import ImageLayer from 'ol/layer/Image';
 import ImageStatic from 'ol/source/ImageStatic';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { apiClient } from '@/api/client';
-import { MapPin, Loader2, Info, X, Droplets, Battery, Thermometer } from 'lucide-react';
+import { apiClient, gisProcClient } from '@/api/client';
+import { MapPin, Loader2, Info, X, Droplets, Battery, Thermometer, Layers, AlertTriangle, CheckCircle2, Activity, Route, TrendingUp, GitMerge, ArrowRight } from 'lucide-react';
 
 interface Field {
   id: string;
@@ -23,10 +23,54 @@ interface Field {
   mapBounds?: number[][] | null;
 }
 
+interface IrrigationRoute {
+  routeName: string | null;
+  fromSubBlock: string;
+  toSubBlock: string;
+  weightScore: number; // 0–100
+  estimatedDistance: number;
+  notes?: string | null;
+}
+
+interface CropCycle {
+  id: string;
+  fieldId: string;
+  subBlockId: string;
+  bucketCode: string;
+  varietyName: string;
+  plantingDate: string;
+  expectedHarvestDate: string | null;
+  actualHarvestDate: string | null;
+  currentPhaseCode: string;
+  status: string;
+}
+
+interface RuleProfile {
+  id: string;
+  name: string;
+  description: string;
+  bucketCode: string;
+  phaseCode: string;
+  awdLowerThresholdCm: number;
+  awdUpperTargetCm: number;
+  droughtAlertCm: number | null;
+  rainDelayMm: number;
+  priorityWeight: number;
+  targetConfidence: string;
+  isDefault: boolean;
+  isActive: boolean;
+}
+
 interface SubBlock {
   id: string;
   name: string;
-  polygonGeom: string; // Stored as GeoJSON string in DB
+  areaM2: number | null;
+  code: string | null;
+  elevationM: string | null;
+  soilType: string | null;
+  isActive: boolean;
+  polygonGeom: string | null; // Stored as GeoJSON string in DB
+  centroid: string | null;    // WKT POINT from PostGIS, e.g. "POINT(lng lat)"
 }
 
 export function MapPage() {
@@ -43,6 +87,21 @@ export function MapPage() {
   const [fieldHistory, setFieldHistory] = useState<any[]>([]);
   const [loadingFieldHistory, setLoadingFieldHistory] = useState(false);
   const [activeTab, setActiveTab] = useState<'water' | 'temp' | 'humidity'>('water');
+
+  const [subBlocks, setSubBlocks] = useState<SubBlock[]>([]);
+  const [loadingSubBlocks, setLoadingSubBlocks] = useState(false);
+
+  const [irrigationRoutes, setIrrigationRoutes] = useState<IrrigationRoute[]>([]);
+  const [loadingRoutes, setLoadingRoutes] = useState(false);
+
+  // subBlockConnections[sourceId] = [targetId, ...] — directed adjacency list (one-way edges)
+  const [subBlockConnections, setSubBlockConnections] = useState<Record<string, string[]>>({});
+
+  const [ruleProfiles, setRuleProfiles] = useState<RuleProfile[]>([]);
+  const [loadingRules, setLoadingRules] = useState(false);
+  const [activeCropCycle, setActiveCropCycle] = useState<CropCycle | null>(null);
+  const [loadingCycle, setLoadingCycle] = useState(false);
+  const [resolvedRuleProfile, setResolvedRuleProfile] = useState<RuleProfile | null>(null);
 
   const vectorSource = useRef(new VectorSource());
   const imageLayer = useRef(new ImageLayer());
@@ -155,6 +214,146 @@ export function MapPage() {
     };
     fetchFields();
   }, []);
+
+  // Fetch rule profiles (global, fetched once)
+  useEffect(() => {
+    const fetchRuleProfiles = async () => {
+      try {
+        setLoadingRules(true);
+        const response = await apiClient.get('/rule-profiles');
+        const data: RuleProfile[] = response.data.data;
+        setRuleProfiles(data);
+      } catch (err) {
+        console.error('Failed to fetch rule profiles', err);
+      } finally {
+        setLoadingRules(false);
+      }
+    };
+    fetchRuleProfiles();
+  }, []);
+
+  // Fetch active crop cycle for selected field, then resolve matching rule profile
+  useEffect(() => {
+    if (!selectedFieldId || subBlocks.length === 0) {
+      setActiveCropCycle(null);
+      setResolvedRuleProfile(null);
+      return;
+    }
+
+    const fetchActiveCropCycle = async () => {
+      try {
+        setLoadingCycle(true);
+        let foundCycle: CropCycle | null = null;
+
+        // Iterate sub-blocks to find the first one with an active crop cycle
+        for (const sb of subBlocks) {
+          const response = await apiClient.get(`/sub-blocks/${sb.id}/crop-cycles`);
+          const cycles: CropCycle[] = response.data.data;
+          const active = cycles.find(c => c.status === 'active');
+          if (active) {
+            foundCycle = active;
+            break;
+          }
+        }
+
+        setActiveCropCycle(foundCycle);
+      } catch (err) {
+        console.error('Failed to fetch active crop cycle', err);
+        setActiveCropCycle(null);
+      } finally {
+        setLoadingCycle(false);
+      }
+    };
+
+    fetchActiveCropCycle();
+  }, [selectedFieldId, subBlocks]);
+
+  // Resolve matching rule profile whenever activeCropCycle or ruleProfiles change
+  useEffect(() => {
+    if (!activeCropCycle || ruleProfiles.length === 0) {
+      setResolvedRuleProfile(null);
+      return;
+    }
+
+    const matched = ruleProfiles.find(
+      r => r.bucketCode === activeCropCycle.bucketCode &&
+           r.phaseCode === activeCropCycle.currentPhaseCode
+    );
+    setResolvedRuleProfile(matched ?? null);
+  }, [activeCropCycle, ruleProfiles]);
+
+  // 3b. Fetch Sub-blocks data for the irrigation management card
+  useEffect(() => {
+    if (!selectedFieldId) return;
+    const fetchSubBlocksData = async () => {
+      try {
+        setLoadingSubBlocks(true);
+        const response = await apiClient.get(`/fields/${selectedFieldId}/sub-blocks`);
+        setSubBlocks(response.data.data);
+      } catch (err) {
+        console.error('Failed to fetch sub-blocks data', err);
+      } finally {
+        setLoadingSubBlocks(false);
+      }
+    };
+    fetchSubBlocksData();
+  }, [selectedFieldId]);
+
+  // Reset connections whenever the sub-block list changes (e.g. different field selected)
+  useEffect(() => {
+    setSubBlockConnections({});
+  }, [subBlocks]);
+
+  // 3c. Fetch irrigation route recommendations
+  useEffect(() => {
+    if (!selectedFieldId || subBlocks.length === 0) return;
+    const fetchIrrigationRoutes = async () => {
+      try {
+        setLoadingRoutes(true);
+
+        // Fetch latest state (waterLevelCm) for each sub-block in parallel
+        const stateResults = await Promise.all(
+          subBlocks.map(sb =>
+            apiClient
+              .get(`/telemetry/sub-blocks/${sb.id}/states/latest`)
+              .then(r => ({ subBlockId: sb.id, waterLevelCm: r.data.data?.waterLevelCm ?? null }))
+              .catch(() => ({ subBlockId: sb.id, waterLevelCm: null }))
+          )
+        );
+        const stateMap: Record<string, string | null> = {};
+        stateResults.forEach(s => { stateMap[s.subBlockId] = s.waterLevelCm; });
+
+        const optimalHeight = resolvedRuleProfile?.awdUpperTargetCm ?? null;
+
+        const nodes = subBlocks.map(sb => ({
+          area:           sb.areaM2,
+          water_height:   stateMap[sb.id] != null ? parseFloat(stateMap[sb.id] as string) : null,
+          optimal_height: optimalHeight,
+          elevation:      sb.elevationM !== null ? parseFloat(sb.elevationM as string) : null,
+        }));
+
+        // Build directed edge list from the connection settings, including centroids
+        const subBlockMap = new globalThis.Map(subBlocks.map(sb => [sb.id, sb]));
+        const edges = Object.entries(subBlockConnections).flatMap(
+          ([fromId, toIds]) => toIds.map(toId => ({
+            from:          fromId,
+            to:            toId,
+            from_centroid: subBlockMap.get(fromId)?.centroid ?? null,
+            to_centroid:   subBlockMap.get(toId)?.centroid ?? null,
+          }))
+        );
+
+        //const response = await gisProcClient.post('/api/floydwarshall/reconstruct', { nodes: payload, edges });
+        //setIrrigationRoutes(response.data);
+        console.debug('[fetchIrrigationRoutes] payload:', nodes, 'edges:', edges);
+      } catch (err) {
+        console.error('Failed to fetch irrigation routes', err);
+      } finally {
+        setLoadingRoutes(false);
+      }
+    };
+    fetchIrrigationRoutes();
+  }, [selectedFieldId, subBlocks, resolvedRuleProfile, subBlockConnections]);
 
   // 3. Fetch & Render Sub-blocks for Selected Field
   useEffect(() => {
@@ -590,6 +789,291 @@ export function MapPage() {
               </div>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      {/* Manajemen dan Prediksi Irigasi Card */}
+      <Card className="shadow-lg border bg-card/60 backdrop-blur">
+        <CardContent className="p-6 space-y-4">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2">
+            <div>
+              <h3 className="text-xl font-bold tracking-tight">Manajemen dan Prediksi Irigasi</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Status dan informasi petak sawah untuk manajemen irigasi terpadu.
+              </p>
+            </div>
+            {subBlocks.length > 0 && (
+              <Badge variant="outline" className="text-2xs bg-primary/5 text-primary border-primary/20">
+                {subBlocks.filter(sb => sb.isActive).length} dari {subBlocks.length} Petak Aktif
+              </Badge>
+            )}
+          </div>
+
+          {/* Rule Profile — auto-resolved from active crop cycle */}
+          <div className="flex flex-col sm:flex-row gap-4 p-4 rounded-xl border bg-muted/20">
+            <div className="flex-1 min-w-0">
+              <label className="text-xs font-semibold uppercase text-muted-foreground mb-1.5 block">
+                Profil Aturan Irigasi (Otomatis)
+              </label>
+              {loadingRules || loadingCycle ? (
+                <div className="flex items-center gap-2 text-muted-foreground text-sm">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Mendeteksi siklus tanam aktif...</span>
+                </div>
+              ) : !activeCropCycle ? (
+                <p className="text-sm text-muted-foreground italic">Tidak ada siklus tanam aktif pada lahan ini.</p>
+              ) : !resolvedRuleProfile ? (
+                <div className="space-y-0.5">
+                  <p className="text-sm font-semibold text-amber-600 dark:text-amber-400">
+                    Aturan tidak ditemukan
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Tidak ada profil yang cocok untuk bucket <span className="font-mono font-semibold">{activeCropCycle.bucketCode}</span> fase <span className="font-mono font-semibold">{activeCropCycle.currentPhaseCode}</span>.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-0.5">
+                  <p className="text-sm font-semibold text-foreground">{resolvedRuleProfile.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    Musim: <span className="font-mono font-semibold">{activeCropCycle.bucketCode}</span> &bull; Fase: <span className="font-mono font-semibold">{activeCropCycle.currentPhaseCode.replace('_', ' ')}</span>
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Resolved profile summary */}
+            {resolvedRuleProfile && (
+              <div className="flex flex-wrap gap-3 items-center sm:border-l sm:pl-4">
+                <div className="text-center">
+                  <p className="text-[10px] uppercase font-semibold text-muted-foreground">Batas Bawah AWD</p>
+                  <p className="text-sm font-bold text-red-500">{resolvedRuleProfile.awdLowerThresholdCm} cm</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-[10px] uppercase font-semibold text-muted-foreground">Target Genangan</p>
+                  <p className="text-sm font-bold text-blue-500">{resolvedRuleProfile.awdUpperTargetCm} cm</p>
+                </div>
+                {resolvedRuleProfile.droughtAlertCm && (
+                  <div className="text-center">
+                    <p className="text-[10px] uppercase font-semibold text-muted-foreground">Alert Kekeringan</p>
+                    <p className="text-sm font-bold text-amber-500">{resolvedRuleProfile.droughtAlertCm} cm</p>
+                  </div>
+                )}
+                <div className="text-center">
+                  <p className="text-[10px] uppercase font-semibold text-muted-foreground">Tunda Hujan</p>
+                  <p className="text-sm font-bold text-foreground">{resolvedRuleProfile.rainDelayMm} mm</p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {loadingSubBlocks ? (
+            <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
+              <Loader2 className="h-8 w-8 animate-spin text-primary mb-2" />
+              <span className="text-sm font-medium">Memuat data petak...</span>
+            </div>
+          ) : subBlocks.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
+              <Layers className="h-10 w-10 mb-3 opacity-40" />
+              <p className="text-sm font-semibold">Belum ada petak sub-block</p>
+              <p className="text-xs opacity-70 mt-1">Pilih lahan atau tambahkan sub-block terlebih dahulu.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pt-2">
+              {subBlocks.map((sb, idx) => {
+                const accentColors = [
+                  { border: 'border-blue-500/30', bg: 'bg-blue-500/5', text: 'text-blue-600 dark:text-blue-400', dot: 'bg-blue-500' },
+                  { border: 'border-emerald-500/30', bg: 'bg-emerald-500/5', text: 'text-emerald-600 dark:text-emerald-400', dot: 'bg-emerald-500' },
+                  { border: 'border-amber-500/30', bg: 'bg-amber-500/5', text: 'text-amber-600 dark:text-amber-400', dot: 'bg-amber-500' },
+                  { border: 'border-pink-500/30', bg: 'bg-pink-500/5', text: 'text-pink-600 dark:text-pink-400', dot: 'bg-pink-500' },
+                ];
+                const accent = accentColors[idx % accentColors.length];
+
+                return (
+                  <div
+                    key={sb.id}
+                    className={`rounded-xl border ${accent.border} ${accent.bg} p-4 flex flex-col gap-3 hover:shadow-md transition-shadow`}
+                  >
+                    {/* Header */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${accent.dot}`} />
+                        <span className={`font-bold text-sm truncate ${accent.text}`}>{sb.name}</span>
+                      </div>
+                      {sb.isActive ? (
+                        <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+                      ) : (
+                        <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
+                      )}
+                    </div>
+
+                    {/* Info rows */}
+                    <div className="space-y-1.5 text-xs text-muted-foreground">
+                      <div className="flex justify-between">
+                        <span>Kode</span>
+                        <span className="font-mono font-semibold text-foreground">{sb.code || '—'}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Elevasi</span>
+                        <span className="font-semibold text-foreground">{sb.elevationM ? `${sb.elevationM} m` : '—'}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Jenis Tanah</span>
+                        <span className="font-semibold text-foreground capitalize">{sb.soilType || '—'}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Peta</span>
+                        <span className={`font-semibold ${sb.polygonGeom ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                          {sb.polygonGeom ? 'Terpetakan' : 'Belum dipetakan'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Status badge */}
+                    <div className="pt-1 border-t border-dashed border-current/10 flex items-center gap-1.5">
+                      <Activity className="h-3 w-3 text-muted-foreground" />
+                      <span className={`text-[11px] font-semibold ${sb.isActive ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'}`}>
+                        {sb.isActive ? 'Irigasi Aktif' : 'Non-aktif'}
+                      </span>
+                    </div>
+
+                    {/* Connection editor — pick which sub-blocks this one flows into */}
+                    {subBlocks.length > 1 && (
+                      <div className="pt-2 border-t border-dashed border-current/10 space-y-1.5">
+                        <div className="flex items-center gap-1 text-[10px] font-semibold uppercase text-muted-foreground">
+                          <ArrowRight className="h-3 w-3" />
+                          <span>Alirkan ke</span>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {subBlocks
+                            .filter(target => target.id !== sb.id)
+                            .map(target => {
+                              const isConnected = (subBlockConnections[sb.id] ?? []).includes(target.id);
+                              return (
+                                <button
+                                  key={target.id}
+                                  onClick={() => {
+                                    setSubBlockConnections(prev => {
+                                      const current = prev[sb.id] ?? [];
+                                      const updated = isConnected
+                                        ? current.filter(id => id !== target.id)
+                                        : [...current, target.id];
+                                      return { ...prev, [sb.id]: updated };
+                                    });
+                                  }}
+                                  className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border transition-all duration-150 ${
+                                    isConnected
+                                      ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                                      : 'bg-transparent text-muted-foreground border-muted-foreground/20 hover:border-primary/60 hover:text-foreground'
+                                  }`}
+                                >
+                                  {target.name}
+                                </button>
+                              );
+                            })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Active connections summary */}
+          {(() => {
+            const allEdges = Object.entries(subBlockConnections).flatMap(
+              ([fromId, toIds]) => toIds.map(toId => ({ fromId, toId }))
+            );
+            if (allEdges.length === 0) return null;
+            return (
+              <div className="border-t pt-4 mt-2 space-y-2">
+                <div className="flex items-center gap-2 text-sm font-semibold">
+                  <GitMerge className="h-4 w-4 text-primary" />
+                  <span>Koneksi Saluran Aktif</span>
+                  <span className="ml-auto text-xs text-muted-foreground font-normal">{allEdges.length} koneksi</span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {allEdges.map(({ fromId, toId }, idx) => {
+                    const fromSb = subBlocks.find(s => s.id === fromId);
+                    const toSb   = subBlocks.find(s => s.id === toId);
+                    const isBidirectional = (subBlockConnections[toId] ?? []).includes(fromId);
+                    return (
+                      <span
+                        key={idx}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-primary/10 text-primary text-xs font-semibold border border-primary/20"
+                      >
+                        {fromSb?.name ?? fromId}
+                        <ArrowRight className="h-3 w-3" />
+                        {toSb?.name ?? toId}
+                        {isBidirectional && (
+                          <span className="ml-0.5 text-[9px] text-primary/60 font-normal">(2 arah)</span>
+                        )}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Rute Irigasi Paling Efektif */}
+          <div className="border-t pt-6 mt-2 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="bg-primary/10 p-2 rounded-lg">
+                <Route className="h-4 w-4 text-primary" />
+              </div>
+              <div>
+                <h4 className="text-base font-bold tracking-tight">Rute Irigasi Paling Efektif</h4>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Rekomendasi urutan distribusi air berdasarkan efisiensi dan kondisi lapangan.
+                </p>
+              </div>
+            </div>
+
+            {loadingRoutes ? (
+              <div className="flex flex-col items-center justify-center py-10 text-muted-foreground">
+                <Loader2 className="h-6 w-6 animate-spin text-primary mb-2" />
+                <span className="text-sm">Menghitung rute optimal...</span>
+              </div>
+            ) : irrigationRoutes.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-10 gap-2 text-muted-foreground border border-dashed rounded-xl bg-muted/20">
+                <TrendingUp className="h-8 w-8 opacity-30" />
+                <p className="text-sm font-semibold">Belum ada data rute irigasi</p>
+                <p className="text-xs opacity-60">Data akan muncul setelah endpoint tersedia.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {irrigationRoutes.map((route, idx) => (
+                  <div
+                    key={idx}
+                    className="flex items-center gap-4 p-4 rounded-xl border bg-card/50 hover:shadow-sm transition-shadow"
+                  >
+                    {/* Route info */}
+                    <div className="flex-1 min-w-0">
+                      <span className="font-semibold text-sm truncate">{route.routeName}</span>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {route.fromSubBlock} → {route.toSubBlock}
+                      </p>
+                      {route.notes && (
+                        <p className="text-[11px] text-muted-foreground/70 mt-1 italic">{route.notes}</p>
+                      )}
+                    </div>
+
+                    {/* Metrics */}
+                    <div className="shrink-0 text-right space-y-0.5">
+                      <div className="flex items-center gap-1 justify-end">
+                        <TrendingUp className="h-3 w-3 text-emerald-500" />
+                        <span className="text-sm font-bold text-emerald-600 dark:text-emerald-400">
+                          {route.weightScore}%
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">{route.estimatedDistance} m</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
     </div>

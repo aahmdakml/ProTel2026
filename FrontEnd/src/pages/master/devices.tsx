@@ -22,6 +22,7 @@ interface Device {
   deviceName: string | null;
   status: string;
   firmwareVersion: string;
+  topic: string;
 }
 
 export function DevicesPage() {
@@ -179,6 +180,7 @@ export function DevicesPage() {
                     <th className="px-6 py-3 font-medium">Koneksi</th>
                     <th className="px-6 py-3 font-medium">Hardware Model</th>
                     <th className="px-6 py-3 font-medium">Firmware</th>
+                    <th className="px-6 py-3 font-medium">Topic</th>
                     <th className="px-6 py-3 font-medium text-center">Status</th>
                     <th className="px-6 py-3 font-medium text-right">Aksi</th>
                   </tr>
@@ -200,6 +202,7 @@ export function DevicesPage() {
                       </td>
                       <td className="px-6 py-4">{dev.hardwareModel || '-'}</td>
                       <td className="px-6 py-4 code font-mono text-xs">v{dev.firmwareVersion}</td>
+                      <td className="px-6 py-4 font-mono text-xs text-muted-foreground">{dev.topic || '-'}</td>
                       <td className="px-6 py-4 text-center">
                         <Badge variant={dev.status === 'active' ? "default" : "destructive"}>
                           {dev.status}

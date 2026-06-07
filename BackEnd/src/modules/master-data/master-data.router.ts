@@ -61,7 +61,7 @@ masterDataRouter.get(
   requireAuth,
   requireFieldAccess('viewer'),
   h(async (req, res) => {
-    const field = await fieldsService.getById(req.params['fieldId']!, req.user!.id);
+    const field = await fieldsService.getById(req.params['fieldId']!);
     res.json(successResponse(field));
   }),
 );
@@ -230,6 +230,17 @@ masterDataRouter.patch(
   h(async (req, res) => {
     const dev = await devicesService.update(req.params['id']!, req.body);
     res.json(successResponse(dev));
+  }),
+);
+
+// GET /devices — list all devices (system_admin only)
+masterDataRouter.get(
+  '/devices',
+  requireAuth,
+  requireSystemRole('system_admin'),
+  h(async (req, res) => {
+    const { rows, meta } = await devicesService.listAll(req.query as Record<string, unknown>);
+    res.json(successResponse(rows, meta));
   }),
 );
 

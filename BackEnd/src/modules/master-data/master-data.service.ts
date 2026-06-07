@@ -30,6 +30,7 @@ import type {
   CreateRuleProfileSchema,
 } from './master-data.schema';
 import type { z } from 'zod';
+import { config } from '@/config';
 
 type CreateFieldInput          = z.infer<typeof CreateFieldSchema>;
 type UpdateFieldInput          = z.infer<typeof UpdateFieldSchema>;
@@ -84,26 +85,21 @@ export const fieldsService = {
       ]);
     }
 
-    rows.forEach((row) => {
-      row.mapVisualUrl = `http://127.0.0.1:8001/webodm/display?project_name=${userId}&task_name=${row.name}&asset_type=orthophoto.tif`;
-    });
-
     return { rows, meta: buildPaginationMeta({ page, limit, offset }, total) };
   },
 
-  async getById(fieldId: string, userId: string) {
+  async getById(fieldId: string) {
     const [field] = await db
       .select()
       .from(fieldsTable)
       .where(and(eq(fieldsTable.id, fieldId), eq(fieldsTable.isActive, true)))
       .limit(1);
     if (!field) throw new AppError(404, 'FIELD_NOT_FOUND', 'Field tidak ditemukan');
-
-    field.mapVisualUrl = `http://127.0.0.1:8001/webodm/display?project_name=${userId}&task_name=${field.name}&asset_type=orthophoto.tif`;
     return field;
   },
 
   async create(input: CreateFieldInput, createdByUserId: string) {
+    const GISPROC_API_BASE_URI = config.GISPROC_API_BASE_URI as string
     const [field] = await db
       .insert(fieldsTable)
       .values({
@@ -115,6 +111,7 @@ export const fieldsService = {
         operatorCountDefault:   input.operator_count_default,
         decisionCycleMode:      input.decision_cycle_mode,
         notes:                  input.notes,
+        mapVisualUrl:           `${GISPROC_API_BASE_URI}/webodm/display?project_name=${createdByUserId}&task_name=${input.name}&asset_type=orthophoto.tif`,
       })
       .returning();
 
@@ -188,12 +185,24 @@ export const fieldsService = {
 // SUB-BLOCKS
 // ===========================================================================
 
+type RawSubBlock = typeof subBlocksTable.$inferSelect;
+
+/** Coerce numeric string columns returned by PostgreSQL into JS numbers. */
+function parseSubBlockNumerics(sb: RawSubBlock) {
+  return {
+    ...sb,
+    areaM2:    sb.areaM2    != null ? parseFloat(sb.areaM2)    : null,
+    elevationM: sb.elevationM != null ? parseFloat(sb.elevationM) : null,
+  };
+}
+
 export const subBlocksService = {
   async listByField(fieldId: string) {
-    return db.select()
+    const rows = await db.select()
       .from(subBlocksTable)
       .where(and(eq(subBlocksTable.fieldId, fieldId), eq(subBlocksTable.isActive, true)))
       .orderBy(subBlocksTable.displayOrder, subBlocksTable.name);
+    return rows.map(parseSubBlockNumerics);
   },
 
   async getById(subBlockId: string) {
@@ -201,7 +210,7 @@ export const subBlocksService = {
       .where(and(eq(subBlocksTable.id, subBlockId), eq(subBlocksTable.isActive, true)))
       .limit(1);
     if (!sb) throw new AppError(404, 'SUB_BLOCK_NOT_FOUND', 'Sub-block tidak ditemukan');
-    return sb;
+    return parseSubBlockNumerics(sb);
   },
 
   async create(fieldId: string, input: CreateSubBlockInput) {
@@ -275,6 +284,17 @@ export const subBlocksService = {
 // ===========================================================================
 
 export const devicesService = {
+  async listAll(query: Record<string, unknown>) {
+    const { page, limit, offset } = parsePagination(query);
+    const [rows, [{ value: total }]] = await Promise.all([
+      db.select().from(devicesTable)
+        .orderBy(devicesTable.deviceCode)
+        .limit(limit).offset(offset),
+      db.select({ value: count() }).from(devicesTable),
+    ]);
+    return { rows, meta: buildPaginationMeta({ page, limit, offset }, total) };
+  },
+
   async listByField(fieldId: string) {
     return db.select().from(devicesTable)
       .where(eq(devicesTable.fieldId, fieldId))
@@ -517,6 +537,20 @@ export const cropCyclesService = {
 // RULE PROFILES
 // ===========================================================================
 
+type RawRuleProfile = typeof ruleProfilesTable.$inferSelect;
+
+/** Coerce numeric string columns returned by PostgreSQL into JS numbers. */
+function parseRuleProfileNumerics(profile: RawRuleProfile) {
+  return {
+    ...profile,
+    awdLowerThresholdCm: parseFloat(profile.awdLowerThresholdCm),
+    awdUpperTargetCm:    parseFloat(profile.awdUpperTargetCm),
+    droughtAlertCm:      profile.droughtAlertCm != null ? parseFloat(profile.droughtAlertCm) : null,
+    rainDelayMm:         parseFloat(profile.rainDelayMm),
+    priorityWeight:      parseFloat(profile.priorityWeight),
+  };
+}
+
 export const ruleProfilesService = {
   async list(query: Record<string, unknown>) {
     const { page, limit, offset } = parsePagination(query);
@@ -527,7 +561,7 @@ export const ruleProfilesService = {
       db.select({ value: count() }).from(ruleProfilesTable)
         .where(eq(ruleProfilesTable.isActive, true)),
     ]);
-    return { rows, meta: buildPaginationMeta({ page, limit, offset }, total) };
+    return { rows: rows.map(parseRuleProfileNumerics), meta: buildPaginationMeta({ page, limit, offset }, total) };
   },
 
   async create(input: CreateRuleProfileInput, createdBy: string) {
@@ -547,13 +581,13 @@ export const ruleProfilesService = {
       isDefault:              input.is_default,
       createdBy,
     }).returning();
-    return profile!;
+    return parseRuleProfileNumerics(profile!);
   },
 
   async getById(id: string) {
     const [profile] = await db.select().from(ruleProfilesTable).where(eq(ruleProfilesTable.id, id)).limit(1);
     if (!profile) throw new AppError(404, 'RULE_PROFILE_NOT_FOUND', 'Profil aturan tidak ditemukan');
-    return profile;
+    return parseRuleProfileNumerics(profile);
   },
 
   async update(id: string, input: Partial<CreateRuleProfileInput>) {
@@ -576,7 +610,7 @@ export const ruleProfilesService = {
       })
       .where(eq(ruleProfilesTable.id, id))
       .returning();
-    return updated!;
+    return parseRuleProfileNumerics(updated!);
   },
 
   async delete(id: string) {
