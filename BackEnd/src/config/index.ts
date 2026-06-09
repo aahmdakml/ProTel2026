@@ -35,6 +35,9 @@ const envSchema = z.object({
   R2_SECRET_ACCESS_KEY: z.string().optional(),
   R2_BUCKET_NAME: z.string().default('awd-orthomosaic'),
   R2_PUBLIC_URL: z.preprocess((val) => val === '' ? undefined : val, z.string().url().optional()),
+
+  // GISPROC
+  GISPROC_API_BASE_URI: z.preprocess((val) => val === '' ? undefined : val, z.string().url().default('http://localhost:8001')),
 });
 
 const _parsed = envSchema.safeParse(process.env);

@@ -139,6 +139,7 @@ export const devices = mst.table('devices', {
   installedAt:      timestamp('installed_at', { withTimezone: true }),
   lastSeenAt:       timestamp('last_seen_at', { withTimezone: true }),
   notes:            text('notes'),
+  topic:            text('topic').notNull().default(''),
   createdAt:        timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt:        timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

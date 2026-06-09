@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 export const apiClient = axios.create({
-  baseURL: 'http://localhost:3000',
+  baseURL: import.meta.env.VITE_BE_API_BASE_URI as string,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -22,3 +22,10 @@ apiClient.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+export const gisProcClient = axios.create({
+  baseURL: import.meta.env.VITE_GISPROC_API_BASE_URI as string,
+  headers: {
+    'Content-Type': 'application/json'
+  },
+})

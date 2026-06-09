@@ -13,8 +13,11 @@ interface RuleProfile {
   description: string;
   bucketCode: string;
   phaseCode: string;
-  awdLowerThresholdCm: string;
-  awdUpperTargetCm: string;
+  awdLowerThresholdCm: number;
+  awdUpperTargetCm: number;
+  droughtAlertCm: number | null;
+  rainDelayMm: number;
+  priorityWeight: number;
   targetConfidence: string;
   isDefault: boolean;
   isActive: boolean;

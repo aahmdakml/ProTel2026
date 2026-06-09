@@ -1,7 +1,8 @@
-import { useState } from 'react';
-import { X, Loader2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { X, Loader2, Video } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { apiClient } from '@/api/client';
+import { videoOpsApi } from '@/api/gisProc';
 
 interface FieldFormData {
   name: string;
@@ -28,6 +29,17 @@ export function CreateFieldModal({ isOpen, initialData, onClose, onSuccess }: Cr
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [videoFile, setVideoFile] = useState<File | null>(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
+  const [currentUserId, setCurrentUserId] = useState<string>('');
+
+  useEffect(() => {
+    apiClient.get('/auth/me').then((res) => {
+      setCurrentUserId(res.data.data.id);
+    }).catch(() => {
+      // silently fail; upload will be skipped if userId is empty
+    });
+  }, []);
 
   if (!isOpen) return null;
 
@@ -55,7 +67,17 @@ export function CreateFieldModal({ isOpen, initialData, onClose, onSuccess }: Cr
       } else {
         await apiClient.post('/fields', payload);
       }
-      
+
+      if (videoFile && currentUserId) {
+        try {
+          await videoOpsApi.uploadVideo(currentUserId, videoFile);
+        } catch (videoErr: any) {
+          setError(videoErr.response?.data?.message || videoErr.message || 'Lahan tersimpan, tetapi gagal mengupload video');
+          onSuccess();
+          return;
+        }
+      }
+
       onSuccess();
       onClose();
     } catch (err: any) {
@@ -63,6 +85,11 @@ export function CreateFieldModal({ isOpen, initialData, onClose, onSuccess }: Cr
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleVideoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] ?? null;
+    setVideoFile(file);
   };
 
   return (
@@ -145,6 +172,32 @@ export function CreateFieldModal({ isOpen, initialData, onClose, onSuccess }: Cr
                <option value="normal">Normal</option>
                <option value="siaga">Siaga</option>
              </select>
+          </div>
+
+          {/* Video Upload */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Video Lahan (.mp4)</label>
+            <div className="flex items-center gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => videoInputRef.current?.click()}
+                className="flex items-center gap-2"
+              >
+                <Video className="h-4 w-4" />
+                Upload Video
+              </Button>
+              <span className="text-sm text-muted-foreground truncate max-w-[200px]">
+                {videoFile ? videoFile.name : 'Belum ada file dipilih'}
+              </span>
+            </div>
+            <input
+              ref={videoInputRef}
+              type="file"
+              accept="video/mp4"
+              className="hidden"
+              onChange={handleVideoSelect}
+            />
           </div>
 
           <div className="flex justify-end space-x-2 pt-4 border-t mt-6">
