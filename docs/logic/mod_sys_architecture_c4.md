@@ -5,74 +5,68 @@ Proyek Smart AWD dipecah menjadi beberapa *Microservices* yang memiliki tugas sp
 
 ## 2. Diagram C4 Komponen & Aliran Data
 ```mermaid
-flowchart LR
+graph TD
     %% Entitas Eksternal
-    subgraph External ["Dunia Eksternal"]
-        Operator(["👤 Petani / Operator"])
-        Drone(["🚁 Drone DJI"])
-        SensorIoT(["📡 Sensor IoT"])
-        BMKG(["⛈️ BMKG API"])
+    Operator(["👤 Operator / Petani"])
+    Drone(["🚁 DJI Drone"])
+    SensorIoT(["📡 Sensor IoT (ESP32)"])
+    BMKG(["⛈️ API Cuaca BMKG"])
+
+    %% Sistem Utama
+    subgraph KLASTER ["KLASTER SISTEM SMART AWD"]
+        
+        %% Ingestion & Cloud Level (Atas)
+        MQTT["✉️ MQTT Broker (Mosquitto)"]
+        WebODM["🏗️ WebODM (Docker Cluster)"]
+        Cloudflare[("☁️ Cloudflare R2 (Object Storage)")]
+        
+        %% Web & App Level (Tengah Atas)
+        FE["🖥️ FrontEnd Web (React/OpenLayers)"]
+        BE["⚙️ BackEnd Server (Node.js/Express)"]
+        
+        %% Python Services Level (Tengah Bawah)
+        subgraph Python_Cluster ["🧠 Python Microservices"]
+            Titiler["🗺️ Titiler COG Server"]
+            DSS["🤖 Decision Engine (FastAPI)"]
+            GIS["📐 GIS Processing (FastAPI)"]
+            ARQ["⏱️ ARQ Redis Worker"]
+        end
+        
+        %% Storage Level (Paling Bawah)
+        subgraph Database_Cluster ["🗄️ Database Polyglot"]
+            Postgres[("Relational & PostGIS")]
+            Timescale[("TimescaleDB (Hypertable)")]
+            Redis[("Redis Memory Cache")]
+        end
     end
 
-    %% Web Client
-    FE["🖥️ FrontEnd (React)"]
-
-    %% Backend Monolith
-    subgraph BE_Cluster ["Backend Layer (Node.js)"]
-        BE_API["⚙️ Main API (Express)"]
-        BE_Cron["⏱️ Background Jobs"]
-        MQTT_Broker["✉️ MQTT Broker"]
-    end
-
-    %% Python Services
-    subgraph Model_Cluster ["AI & Model Layer (Python)"]
-        DSS["🤖 DSS Engine"]
-        Titiler["🗺️ Titiler Map"]
-    end
-
-    subgraph GIS_Cluster ["GIS Processing Layer"]
-        GIS_API["📐 GIS API"]
-        ARQ["🛠️ ARQ Worker"]
-    end
-
-    %% Storage & Infrastructure
-    subgraph Storage ["Lumbung Data"]
-        Postgres[("🐘 PostGIS")]
-        Timescale[("📈 TimescaleDB")]
-        Redis[("🔴 Redis Cache")]
-        R2[("☁️ Cloudflare R2")]
-        WebODM["🏗️ WebODM (Docker)"]
-    end
-
-    %% --------------------------------
-    %% Relasi yang dirapikan (Linear)
-    %% --------------------------------
-
-    %% Flow UI
-    Operator -->|"Akses Web"| FE
-    FE <-->|"REST API"| BE_API
-    FE <-->|"XYZ Tiles"| Titiler
-
-    %% Flow IoT
-    SensorIoT -->|"Publish"| MQTT_Broker
-    MQTT_Broker -->|"Ingest"| BE_Cron
-    BE_Cron -->|"Simpan Timeseries"| Timescale
-
-    %% Flow Drone
-    Drone -->|"Upload"| WebODM
-    WebODM -.->|"TIF to COG"| R2
-    R2 -.->|"Load Map"| Titiler
-
-    %% Flow Sistem Keputusan (DSS & GIS)
-    BE_Cron -->|"Fetch Weather"| BMKG
-    BE_Cron <-->|"Kirim State & Rules"| DSS
-    BE_API <-->|"Kueri Rute Air"| GIS_API
-    GIS_API <-->|"Antrean Task"| Redis
-    Redis <-->|"Proses Matriks"| ARQ
-
-    %% Flow Database Relasional
-    BE_API <-->|"Kueri PostGIS"| Postgres
-    BE_Cron <-->|"Update State"| Postgres
+    %% Hubungan dan Aliran (Top to Bottom)
+    Operator -->|"Interaksi UI"| FE
+    Drone -->|"Upload Foto JPG"| WebODM
+    SensorIoT -->|"Publish JSON"| MQTT
+    
+    %% Alur Peta & Visual (Kiri / Terpisah)
+    WebODM -.->|"Konversi TIF to COG"| Cloudflare
+    Cloudflare -.->|"Byte Range Read"| Titiler
+    Titiler -->|"Serve XYZ Map Tiles"| FE
+    
+    %% Alur Data Sensor (Tengah)
+    MQTT -->|"Subscribe Ingest"| BE
+    BMKG -->|"Fetch Weather"| BE
+    FE <-->|"Serve API Auth & Field Data"| BE
+    
+    %% Alur Pemrosesan Lanjut (DSS & GIS)
+    BE <-->|"Evaluate Req/Res"| DSS
+    BE -->|"Post Centroid Graph"| GIS
+    
+    %% Alur Pekerja (Worker Queue)
+    GIS -->|"Enqueue Task"| Redis
+    Redis -->|"Dequeue & Compute"| ARQ
+    ARQ -->|"Result"| Redis
+    
+    %% Alur Penyimpanan Basis Data (Bawah)
+    BE -->|"Read/Write Master & Spatial"| Postgres
+    BE -->|"Batch Insert Sensor Data"| Timescale
 ```
 
 ## 3. Penjelasan Interaksi
