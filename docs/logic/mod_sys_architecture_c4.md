@@ -7,7 +7,7 @@ Proyek Smart AWD dipecah menjadi beberapa *Microservices* yang memiliki tugas sp
 ```mermaid
 flowchart LR
     %% Entitas Eksternal
-    subgraph External [Dunia Eksternal]
+    subgraph External ["Dunia Eksternal"]
         Operator(["👤 Petani / Operator"])
         Drone(["🚁 Drone DJI"])
         SensorIoT(["📡 Sensor IoT"])
@@ -18,25 +18,25 @@ flowchart LR
     FE["🖥️ FrontEnd (React)"]
 
     %% Backend Monolith
-    subgraph BE_Cluster [Backend Layer (Node.js)]
+    subgraph BE_Cluster ["Backend Layer (Node.js)"]
         BE_API["⚙️ Main API (Express)"]
         BE_Cron["⏱️ Background Jobs"]
         MQTT_Broker["✉️ MQTT Broker"]
     end
 
     %% Python Services
-    subgraph Model_Cluster [AI & Model Layer (Python)]
+    subgraph Model_Cluster ["AI & Model Layer (Python)"]
         DSS["🤖 DSS Engine"]
         Titiler["🗺️ Titiler Map"]
     end
 
-    subgraph GIS_Cluster [GIS Processing Layer]
+    subgraph GIS_Cluster ["GIS Processing Layer"]
         GIS_API["📐 GIS API"]
         ARQ["🛠️ ARQ Worker"]
     end
 
     %% Storage & Infrastructure
-    subgraph Storage [Lumbung Data]
+    subgraph Storage ["Lumbung Data"]
         Postgres[("🐘 PostGIS")]
         Timescale[("📈 TimescaleDB")]
         Redis[("🔴 Redis Cache")]
