@@ -1,10 +1,10 @@
 import { eq, and, sql, inArray } from 'drizzle-orm';
 import { db } from '@/db/client';
 import {
-  subBlocks        as subBlocksTable,
-  flowPaths        as flowPathsTable,
+  subBlocks as subBlocksTable,
+  flowPaths as flowPathsTable,
   irrigationRuleProfiles as ruleProfilesTable,
-  cropCycles       as cropCyclesTable,
+  cropCycles as cropCyclesTable,
 } from '@/db/schema/mst';
 import {
   subBlockCurrentStates as currentStatesTable,
@@ -23,9 +23,9 @@ import {
 // ---------------------------------------------------------------------------
 
 interface RecommendationInput {
-  sub_block_id:        string;
+  sub_block_id: string;
   recommendation_type: string;
-  priority_score:      number;
+  priority_score: number;
 }
 
 interface RecommendationWithId extends RecommendationInput {
@@ -49,8 +49,8 @@ interface RecommendationWithId extends RecommendationInput {
  * 7. Update irrigation_recommendations dengan route_path_ids + routing_score
  */
 export async function runWaterRouting(
-  fieldId:         string,
-  jobId:           string,
+  fieldId: string,
+  jobId: string,
   recommendations: RecommendationInput[],
 ): Promise<void> {
   const logCtx = { fieldId, jobId };
@@ -58,16 +58,16 @@ export async function runWaterRouting(
   // ── 1. Filter: pisah DRAIN (sources) dan IRRIGATE (targets) ──────────────
   // Ambil ID rekomendasi dari DB untuk update nanti
   const savedRecs = await db.select({
-    id:                 recsTable.id,
-    subBlockId:         recsTable.subBlockId,
+    id: recsTable.id,
+    subBlockId: recsTable.subBlockId,
     recommendationType: recsTable.recommendationType,
-    priorityScore:      recsTable.priorityScore,
+    priorityScore: recsTable.priorityScore,
   })
-  .from(recsTable)
-  .where(and(
-    eq(recsTable.fieldId,       fieldId),
-    eq(recsTable.decisionJobId, jobId),
-  ));
+    .from(recsTable)
+    .where(and(
+      eq(recsTable.fieldId, fieldId),
+      eq(recsTable.decisionJobId, jobId),
+    ));
 
   const recMap = new Map(savedRecs.map(r => [r.subBlockId, r]));
 
@@ -88,9 +88,9 @@ export async function runWaterRouting(
   // Sub-blocks: id, area, elevation, centroid sebagai EWKT
   const subBlockRows = await db
     .select({
-      id:          subBlocksTable.id,
-      areaM2:      subBlocksTable.areaM2,
-      elevationM:  subBlocksTable.elevationM,
+      id: subBlocksTable.id,
+      areaM2: subBlocksTable.areaM2,
+      elevationM: subBlocksTable.elevationM,
       centroidEwkt: sql<string>`ST_AsEWKT(${subBlocksTable.centroid})`,
     })
     .from(subBlocksTable)
@@ -105,7 +105,7 @@ export async function runWaterRouting(
   const flowPathRows = await db
     .select({
       fromSubBlockId: flowPathsTable.fromSubBlockId,
-      toSubBlockId:   flowPathsTable.toSubBlockId,
+      toSubBlockId: flowPathsTable.toSubBlockId,
     })
     .from(flowPathsTable)
     .where(and(
@@ -164,14 +164,14 @@ export async function runWaterRouting(
       ? resolveWaterHeight(state, fieldAvgM)
       : { waterHeightM: fieldAvgM, level: 3 as const };
 
-    const waterHeightM  = waterRes?.waterHeightM ?? fieldAvgM;
+    const waterHeightM = waterRes?.waterHeightM ?? fieldAvgM;
     const optimalHeightM = resolveOptimalHeight(sb.id, cycleMap, ruleMap, defaultRule ?? null);
 
     return {
-      area:           parseFloat(sb.areaM2 ?? '100'),  // default 100m² jika null
-      water_height:   waterHeightM,
+      area: parseFloat(sb.areaM2 ?? '100'),  // default 100m² jika null
+      water_height: waterHeightM,
       optimal_height: optimalHeightM,
-      elevation:      parseFloat(sb.elevationM ?? '0'),
+      elevation: parseFloat(sb.elevationM ?? '0'),
     };
   });
 
@@ -201,7 +201,7 @@ export async function runWaterRouting(
 
   try {
     const runRes = await fetch(`${gisUrl}/api/floydwarshall/run`, {
-      method:  'POST',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         num_nodes: subBlockRows.length,
@@ -218,7 +218,7 @@ export async function runWaterRouting(
     }
 
     const runResult = await runRes.json() as { dist: typeof dist; successor: typeof successor };
-    dist      = runResult.dist;
+    dist = runResult.dist;
     successor = runResult.successor;
   } catch (err) {
     logger.error({ err, ...logCtx }, 'Floyd-Warshall /run call failed — routing aborted');
@@ -226,8 +226,8 @@ export async function runWaterRouting(
   }
 
   // ── 6. Pilih pasangan source-target prioritas tertinggi ───────────────────
-  const source  = sources[0]!;
-  const target  = targets[0]!;
+  const source = sources[0]!;
+  const target = targets[0]!;
 
   const srcIdx = uuidToIdx.get(source.sub_block_id);
   const tgtIdx = uuidToIdx.get(target.sub_block_id);
@@ -250,13 +250,13 @@ export async function runWaterRouting(
 
   try {
     const matRes = await fetch(`${gisUrl}/api/floydwarshall/matrix`, {
-      method:  'POST',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        matrix:    dist,
+        matrix: dist,
         successor,
-        source:    srcIdx,
-        target:    tgtIdx,
+        source: srcIdx,
+        target: tgtIdx,
       }),
       signal: AbortSignal.timeout(10_000),
     });
@@ -267,7 +267,7 @@ export async function runWaterRouting(
     }
 
     const matResult = await matRes.json() as { path: number[] | null; weight: number | null };
-    routePath   = matResult.path;
+    routePath = matResult.path;
     routeWeight = matResult.weight;
   } catch (err) {
     logger.error({ err, ...logCtx }, 'Floyd-Warshall /matrix call failed — routing aborted');
@@ -292,18 +292,18 @@ export async function runWaterRouting(
 
   await db.update(recsTable)
     .set({
-      routePathIds:    routeUUIDs as unknown as object,
-      routingScore:    routeWeight?.toFixed(4),
-      fromSubBlockId:  source.sub_block_id,
+      routePathIds: routeUUIDs as unknown as object,
+      routingScore: routeWeight?.toFixed(4),
+      fromSubBlockId: source.sub_block_id,
     })
     .where(eq(recsTable.id, targetRec.id));
 
   logger.info(
     {
       ...logCtx,
-      source:       source.sub_block_id,
-      target:       target.sub_block_id,
-      routeSteps:   routeUUIDs.length,
+      source: source.sub_block_id,
+      target: target.sub_block_id,
+      routeSteps: routeUUIDs.length,
       routingScore: routeWeight,
     },
     '✅ Water routing complete — recommendation enriched',
