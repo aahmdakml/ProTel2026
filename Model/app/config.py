@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     # App
     app_env: str = "development"
-    port: int = 8000
+    port: int = 8002
     log_level: str = "info"
 
     # Database

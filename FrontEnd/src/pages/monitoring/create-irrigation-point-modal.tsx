@@ -67,6 +67,7 @@ function convertPixelPointToGeographic(coords: [number, number], fieldData: any,
 }
 
 export function CreateIrrigationPointModal({ isOpen, fieldId, initialData, onClose, onSuccess }: CreateIrrigationPointModalProps) {
+  const [name, setName] = useState(initialData?.name || '');
   const [pointType, setPointType] = useState<'source' | 'drain'>(initialData?.pointType || 'source');
   const [elevationM, setElevationM] = useState<number | ''>(initialData?.elevationM || '');
   const [coordinatePoint, setCoordinatePoint] = useState<any>(initialData?.coordinatePoint || null);
@@ -74,10 +75,14 @@ export function CreateIrrigationPointModal({ isOpen, fieldId, initialData, onClo
   const [error, setError] = useState('');
   const [isMapEditorOpen, setIsMapEditorOpen] = useState(false);
   const [fieldData, setFieldData] = useState<any>(null);
+  const [subBlocks, setSubBlocks] = useState<any[]>([]);
+  const [embankments, setEmbankments] = useState<any[]>([]);
 
   useEffect(() => {
     if (isOpen && fieldId) {
       apiClient.get(`/fields/${fieldId}`).then(res => setFieldData(res.data.data));
+      apiClient.get(`/fields/${fieldId}/sub-blocks`).then(res => setSubBlocks(res.data.data));
+      apiClient.get(`/fields/${fieldId}/embankments`).then(res => setEmbankments(res.data.data)).catch(() => {});
     }
   }, [isOpen, fieldId]);
 
@@ -95,6 +100,7 @@ export function CreateIrrigationPointModal({ isOpen, fieldId, initialData, onClo
 
     try {
       const payload = {
+        name,
         point_type: pointType,
         coordinate_point: coordinatePoint,
         elevation_m: elevationM === '' ? undefined : elevationM
@@ -133,6 +139,18 @@ export function CreateIrrigationPointModal({ isOpen, fieldId, initialData, onClo
               {error}
             </div>
           )}
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Nama Titik Irigasi *</label>
+            <input
+              type="text"
+              required
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              placeholder="Cth: Pompa Utama / Saluran Primer"
+            />
+          </div>
 
           <div className="space-y-2">
             <label className="text-sm font-medium">Tipe Titik *</label>
@@ -203,28 +221,48 @@ export function CreateIrrigationPointModal({ isOpen, fieldId, initialData, onClo
             field={fieldData}
             existingPoint={coordinatePoint}
             pointType={pointType}
+            subBlocks={subBlocks}
+            embankments={embankments}
             onClose={() => setIsMapEditorOpen(false)}
-            onSave={(coords, mapWidth, mapHeight) => {
+            onSave={(coordsList, mapWidth, mapHeight) => {
+              const isMulti = Array.isArray(coordsList[0]);
+              
               if (fieldData.mapVisualUrl) {
-                // 1. Decide elevation using pixel coordinates
-                const elevation = getPointElevation(coords, fieldData.name);
-                if (elevation !== null) {
-                  setElevationM(elevation);
+                if (isMulti) {
+                  const pts = (coordsList as [number, number][]).map(coords => 
+                    convertPixelPointToGeographic(coords, fieldData, mapWidth, mapHeight)
+                  );
+                  setCoordinatePoint({
+                    type: 'MultiPoint',
+                    coordinates: pts
+                  });
+                  const elevation = getPointElevation(coordsList[0] as [number, number], fieldData.name);
+                  if (elevation !== null) setElevationM(elevation);
+                } else {
+                  const singleCoords = coordsList as [number, number];
+                  const [lon, lat] = convertPixelPointToGeographic(singleCoords, fieldData, mapWidth, mapHeight);
+                  setCoordinatePoint({
+                    type: 'Point',
+                    coordinates: [lon, lat]
+                  });
+                  const elevation = getPointElevation(singleCoords, fieldData.name);
+                  if (elevation !== null) setElevationM(elevation);
                 }
-                
-                // 2. Convert pixel coordinates to geographic coordinates [lon, lat]
-                const [lon, lat] = convertPixelPointToGeographic(coords, fieldData, mapWidth, mapHeight);
-                setCoordinatePoint({
-                  type: 'Point',
-                  coordinates: [lon, lat]
-                });
               } else {
-                // If no imagery exists, coords are OpenLayers map coordinate EPSG:3857, so convert it directly
-                const [lon, lat] = toLonLat(coords);
-                setCoordinatePoint({
-                  type: 'Point',
-                  coordinates: [lon, lat]
-                });
+                if (isMulti) {
+                  const pts = (coordsList as [number, number][]).map(coords => toLonLat(coords));
+                  setCoordinatePoint({
+                    type: 'MultiPoint',
+                    coordinates: pts
+                  });
+                } else {
+                  const singleCoords = coordsList as [number, number];
+                  const [lon, lat] = toLonLat(singleCoords);
+                  setCoordinatePoint({
+                    type: 'Point',
+                    coordinates: [lon, lat]
+                  });
+                }
               }
               setIsMapEditorOpen(false);
             }}

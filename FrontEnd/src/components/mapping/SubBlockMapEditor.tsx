@@ -28,6 +28,9 @@ interface SubBlockMapEditorProps {
   devices: any[];
   selectedDeviceIds: string[];
   subBlockId?: string;
+  isEmbankment?: boolean;
+  existingSubBlocks?: any[];
+  existingEmbankments?: any[];
   onSave: (geojson: any, devicePoints?: Record<string, { x: number; y: number }>, updatedDeviceIds?: string[]) => void;
   onClose: () => void;
 }
@@ -38,6 +41,9 @@ export function SubBlockMapEditor({
   devices, 
   selectedDeviceIds, 
   subBlockId, 
+  isEmbankment = false,
+  existingSubBlocks = [],
+  existingEmbankments = [],
   onSave, 
   onClose 
 }: SubBlockMapEditorProps) {
@@ -120,6 +126,9 @@ export function SubBlockMapEditor({
 
       if (!active) return;
 
+      vectorSource.current.clear();
+      const geojsonFormat = new GeoJSON();
+
       if (existingPolygon) {
         try {
           const geom = typeof existingPolygon === 'string' 
@@ -146,7 +155,6 @@ export function SubBlockMapEditor({
             };
           }
           
-          const geojsonFormat = new GeoJSON();
           const feature = geojsonFormat.readFeatures(
             {
               type: 'Feature',
@@ -154,11 +162,105 @@ export function SubBlockMapEditor({
               properties: {},
             }
           );
-          vectorSource.current.clear();
           vectorSource.current.addFeatures(Array.isArray(feature) ? feature : [feature]);
         } catch (e) {
           console.error("Failed to parse existing polygon in editor", e);
         }
+      }
+
+      // Load other existing sub-blocks
+      if (existingSubBlocks) {
+        existingSubBlocks.forEach((sb) => {
+          if (sb.id === subBlockId) return;
+          if (!sb.polygonGeom) return;
+          
+          try {
+            const geom = typeof sb.polygonGeom === 'string'
+              ? JSON.parse(sb.polygonGeom)
+              : sb.polygonGeom;
+              
+            let geomToLoad = geom;
+            if (imageUrl && geom.type === 'Polygon' && geom.coordinates && geom.coordinates[0]) {
+              const bounds = field.mapBounds || [[ -6.2100, 106.8100], [-6.2110, 106.8110]];
+              const lon_min = bounds[0][1];
+              const lon_max = bounds[1][1];
+              const lat_max = bounds[0][0];
+              const lat_min = bounds[1][0];
+              
+              const geoCoords = geom.coordinates[0] as [number, number][];
+              const pixelCoords = geoCoords.map(([lon, lat]) => {
+                const px = ((lon - lon_min) / (lon_max - lon_min)) * imageWidth;
+                const py = ((lat - lat_min) / (lat_max - lat_min)) * imageHeight;
+                return [px, py];
+              });
+              geomToLoad = {
+                ...geom,
+                coordinates: [pixelCoords]
+              };
+            }
+            
+            const feature = geojsonFormat.readFeatures({
+              type: 'Feature',
+              geometry: geomToLoad,
+              properties: {
+                type: 'existing_sub_block',
+                id: sb.id,
+                name: sb.name
+              }
+            });
+            vectorSource.current.addFeatures(feature);
+          } catch (e) {
+            console.error("Failed to parse existing sub-block geom in editor", e);
+          }
+        });
+      }
+
+      // Load other existing embankments
+      if (existingEmbankments) {
+        existingEmbankments.forEach((emb) => {
+          if (emb.id === subBlockId) return;
+          if (!emb.polygonGeom && !emb.polygon_geom) return;
+          
+          try {
+            const polygonGeomRaw = emb.polygonGeom || emb.polygon_geom;
+            const geom = typeof polygonGeomRaw === 'string'
+              ? JSON.parse(polygonGeomRaw)
+              : polygonGeomRaw;
+              
+            let geomToLoad = geom;
+            if (imageUrl && geom.type === 'Polygon' && geom.coordinates && geom.coordinates[0]) {
+              const bounds = field.mapBounds || [[ -6.2100, 106.8100], [-6.2110, 106.8110]];
+              const lon_min = bounds[0][1];
+              const lon_max = bounds[1][1];
+              const lat_max = bounds[0][0];
+              const lat_min = bounds[1][0];
+              
+              const geoCoords = geom.coordinates[0] as [number, number][];
+              const pixelCoords = geoCoords.map(([lon, lat]) => {
+                const px = ((lon - lon_min) / (lon_max - lon_min)) * imageWidth;
+                const py = ((lat - lat_min) / (lat_max - lat_min)) * imageHeight;
+                return [px, py];
+              });
+              geomToLoad = {
+                ...geom,
+                coordinates: [pixelCoords]
+              };
+            }
+            
+            const feature = geojsonFormat.readFeatures({
+              type: 'Feature',
+              geometry: geomToLoad,
+              properties: {
+                type: 'existing_embankment',
+                id: emb.id,
+                name: emb.name
+              }
+            });
+            vectorSource.current.addFeatures(feature);
+          } catch (e) {
+            console.error("Failed to parse existing embankment geom in editor", e);
+          }
+        });
       }
 
       // Load existing device points
@@ -239,20 +341,57 @@ export function SubBlockMapEditor({
         source: vectorSource.current,
         style: (feature) => {
           const geomType = feature.getGeometry()?.getType();
+          const type = feature.get('type');
+
           if (geomType === 'Point') {
+            if (type === 'device_marker') {
+              return new Style({
+                image: new CircleStyle({
+                  radius: 6,
+                  fill: new Fill({ color: '#3b82f6' }),
+                  stroke: new Stroke({ color: '#fff', width: 2 })
+                }),
+                text: new Text({
+                  text: feature.get('deviceCode') || 'Device',
+                  font: 'bold 10px Inter, sans-serif',
+                  offsetY: -12,
+                  fill: new Fill({ color: '#1d4ed8' }),
+                  stroke: new Stroke({ color: '#fff', width: 2 })
+                })
+              });
+            }
+          }
+
+          if (type === 'existing_sub_block') {
             return new Style({
-              image: new CircleStyle({
-                radius: 6,
-                fill: new Fill({ color: '#3b82f6' }),
-                stroke: new Stroke({ color: '#fff', width: 2 })
-              }),
+              fill: new Fill({ color: 'rgba(34, 197, 94, 0.08)' }),
+              stroke: new Stroke({ color: 'rgba(22, 163, 74, 0.4)', width: 2, lineDash: [4, 4] }),
               text: new Text({
-                text: feature.get('deviceCode') || 'Device',
-                font: 'bold 10px Inter, sans-serif',
-                offsetY: -12,
-                fill: new Fill({ color: '#1d4ed8' }),
-                stroke: new Stroke({ color: '#fff', width: 2 })
+                text: feature.get('name'),
+                font: 'italic bold 10px Inter, sans-serif',
+                fill: new Fill({ color: 'rgba(21, 128, 61, 0.7)' }),
+                stroke: new Stroke({ color: '#fff', width: 1.5 })
               })
+            });
+          }
+
+          if (type === 'existing_embankment') {
+            return new Style({
+              fill: new Fill({ color: 'rgba(147, 51, 234, 0.08)' }),
+              stroke: new Stroke({ color: 'rgba(147, 51, 234, 0.4)', width: 2, lineDash: [4, 4] }),
+              text: new Text({
+                text: feature.get('name'),
+                font: 'italic bold 10px Inter, sans-serif',
+                fill: new Fill({ color: 'rgba(107, 33, 168, 0.7)' }),
+                stroke: new Stroke({ color: '#fff', width: 1.5 })
+              })
+            });
+          }
+
+          if (isEmbankment) {
+            return new Style({
+              fill: new Fill({ color: 'rgba(147, 51, 234, 0.3)' }),
+              stroke: new Stroke({ color: '#9333ea', width: 3 })
             });
           }
           return new Style({
@@ -351,6 +490,28 @@ export function SubBlockMapEditor({
     
     draw.on('drawend', (event) => {
       const feature = event.feature;
+      const coords = (feature.getGeometry() as any).getCoordinates();
+
+      const currentPolygonFeature = vectorSource.current.getFeatures().find(
+        f => f.getGeometry()?.getType() === 'Polygon' && 
+             f.get('type') !== 'existing_sub_block' && 
+             f.get('type') !== 'existing_embankment'
+      );
+
+      let inside = false;
+      if (currentPolygonFeature) {
+        inside = (currentPolygonFeature.getGeometry() as any).intersectsCoordinate(coords);
+      }
+
+      if (!inside) {
+        alert('Perangkat harus ditempatkan di dalam polygon sub-block yang sedang dibuat/diedit!');
+        vectorSource.current.removeFeature(feature);
+        setIsDrawingPoint(false);
+        setActiveDeviceId('');
+        map.removeInteraction(draw);
+        return;
+      }
+
       feature.set('type', 'device_marker');
       feature.set('deviceId', deviceId);
       feature.set('deviceCode', deviceCode);

@@ -76,6 +76,16 @@ interface IrrigationPoint {
   pointType: 'source' | 'drain';
   coordinatePoint: any;
   elevationM: string | null;
+  name?: string | null;
+  assignedSubBlocks?: string[] | null;
+}
+
+interface Embankment {
+  id: string;
+  name: string;
+  code: string | null;
+  polygonGeom: any;
+  connectedSubBlocks: string[];
 }
 
 type RouteEntry = {
@@ -111,8 +121,13 @@ function getNodeCentroidWkt(node: any): string | null {
     const geom = typeof node.coordinatePoint === 'string'
       ? JSON.parse(node.coordinatePoint)
       : node.coordinatePoint;
-    if (geom && geom.type === 'Point' && geom.coordinates) {
-      return `POINT(${geom.coordinates[0]} ${geom.coordinates[1]})`;
+    if (geom) {
+      if (geom.type === 'Point' && geom.coordinates) {
+        return `POINT(${geom.coordinates[0]} ${geom.coordinates[1]})`;
+      }
+      if (geom.type === 'MultiPoint' && Array.isArray(geom.coordinates) && geom.coordinates[0]) {
+        return `POINT(${geom.coordinates[0][0]} ${geom.coordinates[0][1]})`;
+      }
     }
   }
   return null;
@@ -528,64 +543,12 @@ export function MapPage() {
   const [sourceIndex, setSourceIndex] = useState<number>(0);
   const [floydWarshallMatrix, setFloydWarshallMatrix] = useState<any>(null);
   const [irrigationPoints, setIrrigationPoints] = useState<IrrigationPoint[]>([]);
+  const [embankments, setEmbankments] = useState<Embankment[]>([]);
   const [devices, setDevices] = useState<any[]>([]);
 
-  const getNodeCentroidById = (id: string): string | null => {
-    const sb = subBlocks.find(s => s.id === id);
-    if (sb) return sb.centroid;
-    const ip = irrigationPoints.find(p => p.id === id);
-    if (ip) {
-      return getNodeCentroidWkt(ip);
-    }
-    return null;
-  };
 
-  const saveConnectionsToLocalStorage = async (connections: Record<string, string[]>) => {
-    const edges = Object.entries(connections).flatMap(
-      ([fromId, toIds]) => toIds.map(toId => ({
-        from:          fromId,
-        to:            toId,
-        from_centroid: getNodeCentroidById(fromId),
-        to_centroid:   getNodeCentroidById(toId),
-      }))
-    );
-    try {
-      await apiClient.patch(`/fields/${selectedFieldId}`, {
-        irrigation_edges: edges,
-      });
-      setFields(prev => prev.map(f => f.id === selectedFieldId ? { ...f, irrigationEdges: edges } : f));
-    } catch (err) {
-      console.error('Failed to save irrigation edges to database', err);
-    }
-  };
 
-  const getEligibleTargets = (fromId: string, isIrrPoint: boolean) => {
-    if (isIrrPoint) {
-      const ip = irrigationPoints.find(p => p.id === fromId);
-      if (ip && ip.pointType === 'drain') {
-        return []; // Drain cannot route to anything
-      }
-    }
 
-    const targets: { id: string; name: string }[] = [];
-
-    // Add sub-blocks (excluding itself if fromId is a sub-block)
-    subBlocks.forEach(sb => {
-      if (sb.id !== fromId) {
-        targets.push({ id: sb.id, name: sb.name });
-      }
-    });
-
-    // Add drains (excluding itself if fromId is a drain)
-    irrigationPoints.forEach(ip => {
-      if (ip.pointType === 'drain' && ip.id !== fromId) {
-        const elevText = ip.elevationM ? ` (${ip.elevationM} m)` : '';
-        targets.push({ id: ip.id, name: `BUANG${elevText}` });
-      }
-    });
-
-    return targets;
-  };
 
   const fetchMatrixResult = async () => {
     try {
@@ -689,7 +652,7 @@ export function MapPage() {
         ...subBlocks,
         ...irrigationPoints.map(ip => ({
           id: ip.id,
-          name: ip.pointType === 'source' ? 'SUMBER' : 'BUANG',
+          name: ip.name || (ip.pointType === 'source' ? 'SUMBER' : 'BUANG'),
           pointType: ip.pointType,
           coordinatePoint: ip.coordinatePoint,
           elevationM: ip.elevationM,
@@ -913,6 +876,25 @@ export function MapPage() {
               });
             }
 
+            const isEmbankment = feature.get('isEmbankment');
+            if (isEmbankment) {
+              return new Style({
+                stroke: new Stroke({
+                  color: '#9333ea',
+                  width: 2.5,
+                }),
+                fill: new Fill({
+                  color: 'rgba(147, 51, 234, 0.2)',
+                }),
+                text: new Text({
+                  text: feature.get('name'),
+                  font: 'bold 11px Inter, sans-serif',
+                  fill: new Fill({ color: '#6b21a8' }),
+                  stroke: new Stroke({ color: '#fff', width: 2 }),
+                }),
+              });
+            }
+
             return new Style({
               stroke: new Stroke({
                 color: '#16a34a',
@@ -1096,19 +1078,21 @@ export function MapPage() {
     setResolvedRuleProfile(matched ?? null);
   }, [activeCropCycle, ruleProfiles]);
 
-  // 3b. Fetch Sub-blocks, Irrigation Points & Devices data for the irrigation management card
+  // 3b. Fetch Sub-blocks, Irrigation Points, Embankments & Devices data for the irrigation management card
   useEffect(() => {
     if (!selectedFieldId) return;
     const fetchSubBlocksData = async () => {
       try {
         setLoadingSubBlocks(true);
-        const [subBlocksRes, pointsRes, devicesRes] = await Promise.all([
+        const [subBlocksRes, pointsRes, embankmentsRes, devicesRes] = await Promise.all([
           apiClient.get(`/fields/${selectedFieldId}/sub-blocks`),
           apiClient.get(`/fields/${selectedFieldId}/irrigation-points`),
+          apiClient.get(`/fields/${selectedFieldId}/embankments`).catch(() => ({ data: { data: [] } })),
           apiClient.get(`/fields/${selectedFieldId}/devices`)
         ]);
         setSubBlocks(subBlocksRes.data.data);
         setIrrigationPoints(pointsRes.data.data);
+        setEmbankments(embankmentsRes.data.data || []);
         setDevices(devicesRes.data.data || []);
       } catch (err) {
         console.error('Failed to fetch sub-blocks data', err);
@@ -1144,32 +1128,65 @@ export function MapPage() {
     fetchFloydWarshallMatrix();
   }, [selectedFieldId]);
 
-  // Reset connections whenever the sub-block list changes (e.g. different field selected)
-  // unless there are saved edges in localStorage, which we prioritize.
+  // Derive sub-block connections from embankments' connectedSubBlocks.
+  // Each embankment lists the sub-blocks it borders — all pairs within that list
+  // become bidirectional edges (water can flow between adjacent sub-blocks).
   useEffect(() => {
     if (!selectedFieldId) {
       setSubBlockConnections({});
       return;
     }
-    try {
-      const field = fields.find(f => f.id === selectedFieldId);
-      const edges = field?.irrigationEdges;
-      if (Array.isArray(edges) && edges.length > 0) {
-        const connections: Record<string, string[]> = {};
-        edges.forEach(edge => {
-          if (edge && edge.from && edge.to) {
-            if (!connections[edge.from]) connections[edge.from] = [];
-            if (!connections[edge.from].includes(edge.to)) connections[edge.from].push(edge.to);
-          }
-        });
-        setSubBlockConnections(connections);
-        return;
+
+    const connections: Record<string, string[]> = {};
+
+    const addEdge = (fromId: string, toId: string) => {
+      if (!connections[fromId]) connections[fromId] = [];
+      if (!connections[fromId].includes(toId)) connections[fromId].push(toId);
+    };
+
+    // Build bidirectional edges from embankments' connectedSubBlocks
+    for (const emb of embankments) {
+      const connected = emb.connectedSubBlocks ?? [];
+      // Every pair of sub-blocks sharing the same embankment can flow to each other
+      for (let i = 0; i < connected.length; i++) {
+        for (let j = i + 1; j < connected.length; j++) {
+          addEdge(connected[i], connected[j]);
+          addEdge(connected[j], connected[i]);
+        }
       }
-    } catch (e) {
-      console.error('Error loading subBlockConnections from database on subBlocks change', e);
     }
-    setSubBlockConnections({});
-  }, [subBlocks, irrigationPoints, selectedFieldId, fields]);
+
+    // Add edges for irrigation points based on assignedSubBlocks
+    for (const ip of irrigationPoints) {
+      const assigned = ip.assignedSubBlocks ?? [];
+      for (const sbId of assigned) {
+        if (ip.pointType === 'source') {
+          addEdge(ip.id, sbId);
+        } else {
+          addEdge(sbId, ip.id);
+        }
+      }
+    }
+
+    // Fallback: if no embankment-derived edges, try loading from saved irrigationEdges
+    if (Object.keys(connections).length === 0) {
+      try {
+        const field = fields.find(f => f.id === selectedFieldId);
+        const edges = field?.irrigationEdges;
+        if (Array.isArray(edges) && edges.length > 0) {
+          edges.forEach(edge => {
+            if (edge && edge.from && edge.to) {
+              addEdge(edge.from, edge.to);
+            }
+          });
+        }
+      } catch (e) {
+        console.error('Error loading subBlockConnections fallback from irrigationEdges', e);
+      }
+    }
+
+    setSubBlockConnections(connections);
+  }, [subBlocks, irrigationPoints, embankments, selectedFieldId, fields]);
 
 
 
@@ -1180,15 +1197,17 @@ export function MapPage() {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const [subBlocksRes, pointsRes, devicesRes] = await Promise.all([
+        const [subBlocksRes, pointsRes, devicesRes, embankmentsRes] = await Promise.all([
           apiClient.get(`/fields/${selectedFieldId}/sub-blocks`),
           apiClient.get(`/fields/${selectedFieldId}/irrigation-points`),
-          apiClient.get(`/fields/${selectedFieldId}/devices`)
+          apiClient.get(`/fields/${selectedFieldId}/devices`),
+          apiClient.get(`/fields/${selectedFieldId}/embankments`).catch(() => ({ data: { data: [] } }))
         ]);
 
         const subBlocks: SubBlock[] = subBlocksRes.data.data;
         const points: IrrigationPoint[] = pointsRes.data.data;
         const devicesData: any[] = devicesRes.data.data || [];
+        const embankments: any[] = embankmentsRes.data.data || [];
 
         vectorSource.current.clear();
 
@@ -1221,6 +1240,36 @@ export function MapPage() {
           }
         });
 
+        embankments.forEach((emb) => {
+          if (!emb.polygonGeom && !emb.polygon_geom) return;
+          try {
+            const geom = typeof (emb.polygonGeom || emb.polygon_geom) === 'string'
+              ? JSON.parse(emb.polygonGeom || emb.polygon_geom)
+              : (emb.polygonGeom || emb.polygon_geom);
+            
+            if (!geom || !geom.coordinates || geom.coordinates.length === 0) return;
+            
+            const feature = geojsonFormat.readFeature(
+              {
+                type: 'Feature',
+                geometry: geom,
+                properties: { 
+                  id: emb.id, 
+                  name: emb.name,
+                  isEmbankment: true
+                },
+              },
+              {
+                dataProjection: 'EPSG:4326',
+                featureProjection: 'EPSG:3857',
+              }
+            );
+            features.push(feature);
+          } catch (e) {
+            console.error(`Invalid geometry for embankment ${emb.name}`, e);
+          }
+        });
+
         points.forEach((ip) => {
           if (!ip.coordinatePoint) return;
           try {
@@ -1236,7 +1285,7 @@ export function MapPage() {
                 geometry: geom,
                 properties: { 
                   id: ip.id, 
-                  name: ip.pointType === 'source' ? 'SUMBER' : 'BUANG',
+                  name: ip.name || (ip.pointType === 'source' ? 'SUMBER' : 'BUANG'),
                   isIrrigationPoint: true,
                   pointType: ip.pointType
                 },
@@ -1845,43 +1894,7 @@ export function MapPage() {
                       </span>
                     </div>
 
-                    {/* Connection editor — pick which targets this one flows into */}
-                    {getEligibleTargets(sb.id, false).length > 0 && (
-                      <div className="pt-2 border-t border-dashed border-current/10 space-y-1.5">
-                        <div className="flex items-center gap-1 text-[10px] font-semibold uppercase text-muted-foreground">
-                          <ArrowRight className="h-3 w-3" />
-                          <span>Alirkan ke</span>
-                        </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {getEligibleTargets(sb.id, false).map(target => {
-                            const isConnected = (subBlockConnections[sb.id] ?? []).includes(target.id);
-                            return (
-                              <button
-                                key={target.id}
-                                onClick={() => {
-                                  setSubBlockConnections(prev => {
-                                    const current = prev[sb.id] ?? [];
-                                    const updated = isConnected
-                                      ? current.filter(id => id !== target.id)
-                                      : [...current, target.id];
-                                    const newConnections = { ...prev, [sb.id]: updated };
-                                    saveConnectionsToLocalStorage(newConnections);
-                                    return newConnections;
-                                  });
-                                }}
-                                className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border transition-all duration-150 ${
-                                  isConnected
-                                    ? 'bg-primary text-primary-foreground border-primary shadow-sm'
-                                    : 'bg-transparent text-muted-foreground border-muted-foreground/20 hover:border-primary/60 hover:text-foreground'
-                                }`}
-                              >
-                                {target.name}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
+                    {/* Connection editor removed — connections are derived automatically */}
                   </div>
                 );
               })}
@@ -1917,56 +1930,30 @@ export function MapPage() {
                             {accent.label}
                           </span>
                           <span className="font-bold text-sm truncate text-foreground">
-                            Titik {isSource ? 'Sumber' : 'Buang'} #{idx + 1}
+                            {ip.name || `Titik ${isSource ? 'Sumber' : 'Buang'} #${idx + 1}`}
                           </span>
                         </div>
                       </div>
-
+ 
                       {/* Info rows */}
                       <div className="space-y-1.5 text-xs text-muted-foreground">
                         <div className="flex justify-between">
                           <span>Elevasi</span>
                           <span className="font-semibold text-foreground">{ip.elevationM ? `${ip.elevationM} m` : '—'}</span>
                         </div>
-                      </div>
-
-                      {/* Connection editor */}
-                      {isSource && getEligibleTargets(ip.id, true).length > 0 && (
-                        <div className="pt-2 border-t border-dashed border-current/10 space-y-1.5">
-                          <div className="flex items-center gap-1 text-[10px] font-semibold uppercase text-muted-foreground">
-                            <ArrowRight className="h-3 w-3" />
-                            <span>Alirkan ke</span>
-                          </div>
-                          <div className="flex flex-wrap gap-1.5">
-                            {getEligibleTargets(ip.id, true).map(target => {
-                              const isConnected = (subBlockConnections[ip.id] ?? []).includes(target.id);
-                              return (
-                                <button
-                                  key={target.id}
-                                  onClick={() => {
-                                    setSubBlockConnections(prev => {
-                                      const current = prev[ip.id] ?? [];
-                                      const updated = isConnected
-                                        ? current.filter(id => id !== target.id)
-                                        : [...current, target.id];
-                                      const newConnections = { ...prev, [ip.id]: updated };
-                                      saveConnectionsToLocalStorage(newConnections);
-                                      return newConnections;
-                                    });
-                                  }}
-                                  className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border transition-all duration-150 ${
-                                    isConnected
-                                      ? 'bg-primary text-primary-foreground border-primary shadow-sm'
-                                      : 'bg-transparent text-muted-foreground border-muted-foreground/20 hover:border-primary/60 hover:text-foreground'
-                                  }`}
-                                >
-                                  {target.name}
-                                </button>
-                              );
-                            })}
-                          </div>
+                        <div className="flex flex-col gap-1">
+                          <span>Terhubung ke Sub-blok:</span>
+                          <span className="font-semibold text-foreground">
+                            {(() => {
+                              const assigned = ip.assignedSubBlocks ?? [];
+                              if (assigned.length === 0) return 'Tidak terhubung';
+                              return assigned
+                                .map(id => subBlocks.find(sb => sb.id === id)?.name || id)
+                                .join(', ');
+                            })()}
+                          </span>
                         </div>
-                      )}
+                      </div>
                     </div>
                   );
                 })}
@@ -1992,8 +1979,8 @@ export function MapPage() {
                     const fromSb = subBlocks.find(s => s.id === fromId) || irrigationPoints.find(ip => ip.id === fromId);
                     const toSb   = subBlocks.find(s => s.id === toId) || irrigationPoints.find(ip => ip.id === toId);
                     const isBidirectional = (subBlockConnections[toId] ?? []).includes(fromId);
-                    const fromName = fromSb ? ('pointType' in fromSb ? (fromSb.pointType === 'source' ? 'SUMBER' : 'BUANG') : fromSb.name) : fromId;
-                    const toName = toSb ? ('pointType' in toSb ? (toSb.pointType === 'source' ? 'SUMBER' : 'BUANG') : toSb.name) : toId;
+                    const fromName = fromSb ? ('pointType' in fromSb ? (fromSb.name || (fromSb.pointType === 'source' ? 'SUMBER' : 'BUANG')) : fromSb.name) : fromId;
+                    const toName = toSb ? ('pointType' in toSb ? (toSb.name || (toSb.pointType === 'source' ? 'SUMBER' : 'BUANG')) : toSb.name) : toId;
                     return (
                       <span
                         key={idx}
