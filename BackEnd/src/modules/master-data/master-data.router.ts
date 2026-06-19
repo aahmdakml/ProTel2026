@@ -11,6 +11,7 @@ import {
   cropCyclesService,
   ruleProfilesService,
   irrigationPointsService,
+  embankmentsService,
 } from './master-data.service';
 import {
   CreateFieldSchema,
@@ -31,6 +32,9 @@ import {
   UpdateRuleProfileSchema,
   CreateIrrigationPointSchema,
   UpdateIrrigationPointSchema,
+  CreateEmbankmentSchema,
+  UpdateEmbankmentSchema,
+  ImportEmbankmentSchema,
 } from './master-data.schema';
 
 export const masterDataRouter = Router();
@@ -547,5 +551,77 @@ masterDataRouter.delete(
   h(async (req, res) => {
     await ruleProfilesService.delete(req.params['id']!);
     res.json(successResponse({ message: 'Profil aturan dihapus' }));
+  }),
+);
+
+// ===========================================================================
+// EMBANKMENTS  —  /fields/:fieldId/embankments  &  /embankments/:id
+// ===========================================================================
+
+// GET /fields/:fieldId/embankments
+masterDataRouter.get(
+  '/fields/:fieldId/embankments',
+  requireAuth,
+  requireFieldAccess('viewer'),
+  h(async (req, res) => {
+    const rows = await embankmentsService.listByField(req.params['fieldId']!);
+    res.json(successResponse(rows));
+  }),
+);
+
+// GET /embankments/:id
+masterDataRouter.get(
+  '/embankments/:id',
+  requireAuth,
+  h(async (req, res) => {
+    const emb = await embankmentsService.getById(req.params['id']!);
+    res.json(successResponse(emb));
+  }),
+);
+
+// POST /fields/:fieldId/embankments
+masterDataRouter.post(
+  '/fields/:fieldId/embankments',
+  requireAuth,
+  requireFieldAccess('manager'),
+  validate(CreateEmbankmentSchema),
+  h(async (req, res) => {
+    const emb = await embankmentsService.create(req.params['fieldId']!, req.body);
+    res.status(201).json(successResponse(emb));
+  }),
+);
+
+// POST /fields/:fieldId/embankments/import-geojson
+masterDataRouter.post(
+  '/fields/:fieldId/embankments/import-geojson',
+  requireAuth,
+  requireFieldAccess('manager'),
+  validate(ImportEmbankmentSchema),
+  h(async (req, res) => {
+    const result = await embankmentsService.importFromGeoJson(req.params['fieldId']!, req.body);
+    res.status(201).json(successResponse(result));
+  }),
+);
+
+// PATCH /embankments/:id
+masterDataRouter.patch(
+  '/embankments/:id',
+  requireAuth,
+  requireFieldAccess('manager'),
+  validate(UpdateEmbankmentSchema),
+  h(async (req, res) => {
+    const emb = await embankmentsService.update(req.params['id']!, req.body);
+    res.json(successResponse(emb));
+  }),
+);
+
+// DELETE /embankments/:id
+masterDataRouter.delete(
+  '/embankments/:id',
+  requireAuth,
+  requireFieldAccess('manager'),
+  h(async (req, res) => {
+    await embankmentsService.delete(req.params['id']!);
+    res.json(successResponse({ message: 'Pematang berhasil dihapus' }));
   }),
 );

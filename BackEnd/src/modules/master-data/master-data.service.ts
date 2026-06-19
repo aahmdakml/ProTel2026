@@ -5,6 +5,7 @@ import {
   users as usersTable,
   userFields as userFieldsTable,
   subBlocks as subBlocksTable,
+  embankments as embankmentsTable,
   devices as devicesTable,
   deviceAssignments as deviceAssignmentsTable,
   sensorCalibrations as sensorCalibrationsTable,
@@ -33,6 +34,9 @@ import type {
   CreateRuleProfileSchema,
   CreateIrrigationPointSchema,
   UpdateIrrigationPointSchema,
+  CreateEmbankmentSchema,
+  UpdateEmbankmentSchema,
+  ImportEmbankmentSchema,
 } from './master-data.schema';
 import type { z } from 'zod';
 import { config } from '@/config';
@@ -53,6 +57,9 @@ type UpdateCropCyclePhaseInput = z.infer<typeof UpdateCropCyclePhaseSchema>;
 type CreateRuleProfileInput    = z.infer<typeof CreateRuleProfileSchema>;
 type CreateIrrigationPointInput = z.infer<typeof CreateIrrigationPointSchema>;
 type UpdateIrrigationPointInput = z.infer<typeof UpdateIrrigationPointSchema>;
+type CreateEmbankmentInput      = z.infer<typeof CreateEmbankmentSchema>;
+type UpdateEmbankmentInput      = z.infer<typeof UpdateEmbankmentSchema>;
+type ImportEmbankmentInput      = z.infer<typeof ImportEmbankmentSchema>;
 
 // ===========================================================================
 // FIELDS
@@ -199,6 +206,39 @@ export const fieldsService = {
 // SUB-BLOCKS
 // ===========================================================================
 
+/** Calculate connected sub-blocks based on polygon overlap using ST_Intersects */
+async function calculateIntersectingSubBlocks(fieldId: string, polygonGeom: any): Promise<string[]> {
+  if (!polygonGeom) return [];
+  const geomJson = typeof polygonGeom === 'string' ? polygonGeom : JSON.stringify(polygonGeom);
+  
+  const result = await db.select({ id: subBlocksTable.id })
+    .from(subBlocksTable)
+    .where(and(
+      eq(subBlocksTable.fieldId, fieldId),
+      eq(subBlocksTable.isActive, true),
+      sql`ST_Intersects(${subBlocksTable.polygonGeom}, ST_SetSRID(ST_GeomFromGeoJSON(${geomJson}), 4326))`
+    ));
+  
+  return result.map(row => row.id);
+}
+
+/** Recalculate connected sub-blocks for all active embankments in a field */
+async function recalculateFieldEmbankments(fieldId: string): Promise<void> {
+  const embs = await db.select({ id: embankmentsTable.id, polygonGeom: embankmentsTable.polygonGeom })
+    .from(embankmentsTable)
+    .where(and(
+      eq(embankmentsTable.fieldId, fieldId),
+      eq(embankmentsTable.isActive, true)
+    ));
+
+  for (const emb of embs) {
+    const connectedSubBlocks = await calculateIntersectingSubBlocks(fieldId, emb.polygonGeom);
+    await db.update(embankmentsTable)
+      .set({ connectedSubBlocks, updatedAt: new Date() })
+      .where(eq(embankmentsTable.id, emb.id));
+  }
+}
+
 type RawSubBlock = typeof subBlocksTable.$inferSelect;
 
 /** Coerce numeric string columns returned by PostgreSQL into JS numbers. */
@@ -217,6 +257,7 @@ export const subBlocksService = {
       fieldId: subBlocksTable.fieldId,
       name: subBlocksTable.name,
       code: subBlocksTable.code,
+      uniqueCode: subBlocksTable.uniqueCode,
       polygonGeom: sql<string>`ST_AsGeoJSON(${subBlocksTable.polygonGeom})`,
       areaM2: subBlocksTable.areaM2,
       centroid: sql<string | null>`ST_AsGeoJSON(${subBlocksTable.centroid})`,
@@ -261,6 +302,7 @@ export const subBlocksService = {
       fieldId: subBlocksTable.fieldId,
       name: subBlocksTable.name,
       code: subBlocksTable.code,
+      uniqueCode: subBlocksTable.uniqueCode,
       polygonGeom: sql<string>`ST_AsGeoJSON(${subBlocksTable.polygonGeom})`,
       areaM2: subBlocksTable.areaM2,
       centroid: sql<string | null>`ST_AsGeoJSON(${subBlocksTable.centroid})`,
@@ -310,6 +352,10 @@ export const subBlocksService = {
     }).returning();
 
     if (!inserted) throw new AppError(500, 'CREATE_FAILED', 'Gagal membuat sub-block');
+    
+    // Recalculate connected sub-blocks for embankments in this field
+    await recalculateFieldEmbankments(fieldId);
+    
     return inserted;
   },
 
@@ -328,6 +374,12 @@ export const subBlocksService = {
       .where(eq(subBlocksTable.id, subBlockId))
       .returning();
     if (!updated) throw new AppError(404, 'SUB_BLOCK_NOT_FOUND', 'Sub-block tidak ditemukan');
+    
+    // Recalculate field embankments if polygon geom changed
+    if (input.polygon_geom !== undefined) {
+      await recalculateFieldEmbankments(updated.fieldId);
+    }
+    
     return updated;
   },
 
@@ -351,13 +403,22 @@ export const subBlocksService = {
       if (inserted) insertedIds.push(inserted.id);
     }
 
+    if (insertedIds.length > 0) {
+      await recalculateFieldEmbankments(fieldId);
+    }
+
     return { inserted: insertedIds.length, ids: insertedIds };
   },
 
   async delete(subBlockId: string) {
-    await db.update(subBlocksTable)
+    const [updated] = await db.update(subBlocksTable)
       .set({ isActive: false, updatedAt: new Date() })
-      .where(eq(subBlocksTable.id, subBlockId));
+      .where(eq(subBlocksTable.id, subBlockId))
+      .returning();
+      
+    if (updated) {
+      await recalculateFieldEmbankments(updated.fieldId);
+    }
   },
 };
 
@@ -644,6 +705,44 @@ function parseIrrigationPoint(ip: RawIrrigationPoint) {
   };
 }
 
+async function calculateAssignedSubBlocksForPoint(fieldId: string, coordinatePoint: any): Promise<string[]> {
+  if (!coordinatePoint) return [];
+  const geomJson = typeof coordinatePoint === 'string' ? coordinatePoint : JSON.stringify(coordinatePoint);
+
+  const subBlockIds = new Set<string>();
+
+  // 1. Check if the point intersects any embankments in the field
+  const intersectingEmbankments = await db.select({
+    connectedSubBlocks: embankmentsTable.connectedSubBlocks,
+  })
+  .from(embankmentsTable)
+  .where(and(
+    eq(embankmentsTable.fieldId, fieldId),
+    eq(embankmentsTable.isActive, true),
+    sql`ST_Intersects(ST_SetSRID(ST_GeomFromGeoJSON(${embankmentsTable.polygonGeom}), 4326), ST_SetSRID(ST_GeomFromGeoJSON(${geomJson}), 4326))`
+  ));
+
+  for (const emb of intersectingEmbankments) {
+    const connected = emb.connectedSubBlocks ?? [];
+    connected.forEach(id => subBlockIds.add(id));
+  }
+
+  // 2. Check if the point intersects any sub-blocks directly
+  const intersectingSubBlocks = await db.select({
+    id: subBlocksTable.id,
+  })
+  .from(subBlocksTable)
+  .where(and(
+    eq(subBlocksTable.fieldId, fieldId),
+    eq(subBlocksTable.isActive, true),
+    sql`ST_Intersects(${subBlocksTable.polygonGeom}, ST_SetSRID(ST_GeomFromGeoJSON(${geomJson}), 4326))`
+  ));
+
+  intersectingSubBlocks.forEach(row => subBlockIds.add(row.id));
+
+  return Array.from(subBlockIds);
+}
+
 export const irrigationPointsService = {
   async listByField(fieldId: string) {
     const rows = await db.select().from(irrigationPointsTable)
@@ -665,17 +764,38 @@ export const irrigationPointsService = {
       .from(fieldsTable).where(eq(fieldsTable.id, fieldId)).limit(1);
     if (!field) throw new AppError(404, 'FIELD_NOT_FOUND', 'Lahan tidak ditemukan');
 
+    // Calculate assigned sub-blocks automatically based on point containment
+    let assignedSubBlocks: string[] = [];
+    if (input.coordinate_point) {
+      assignedSubBlocks = await calculateAssignedSubBlocksForPoint(fieldId, input.coordinate_point);
+    }
+
     const [ip] = await db.insert(irrigationPointsTable).values({
       fieldId,
       pointType:       input.point_type,
       coordinatePoint: input.coordinate_point ? JSON.stringify(input.coordinate_point) : null,
       elevationM:      input.elevation_m?.toString(),
+      name:            input.name,
+      assignedSubBlocks: assignedSubBlocks,
     }).returning();
 
     return parseIrrigationPoint(ip!);
   },
 
   async update(id: string, input: UpdateIrrigationPointInput) {
+    const [existing] = await db.select({ fieldId: irrigationPointsTable.fieldId, coordinatePoint: irrigationPointsTable.coordinatePoint })
+      .from(irrigationPointsTable).where(eq(irrigationPointsTable.id, id)).limit(1);
+    if (!existing) throw new AppError(404, 'IRRIGATION_POINT_NOT_FOUND', 'Titik irigasi tidak ditemukan');
+
+    let assignedSubBlocks: string[] | undefined = undefined;
+    if (input.coordinate_point !== undefined) {
+      if (input.coordinate_point) {
+        assignedSubBlocks = await calculateAssignedSubBlocksForPoint(existing.fieldId, input.coordinate_point);
+      } else {
+        assignedSubBlocks = [];
+      }
+    }
+
     const [updated] = await db.update(irrigationPointsTable)
       .set({
         ...(input.point_type !== undefined && { pointType: input.point_type }),
@@ -683,6 +803,8 @@ export const irrigationPointsService = {
           coordinatePoint: input.coordinate_point ? JSON.stringify(input.coordinate_point) : null 
         }),
         ...(input.elevation_m !== undefined && { elevationM: input.elevation_m?.toString() }),
+        ...(input.name !== undefined && { name: input.name }),
+        ...(assignedSubBlocks !== undefined && { assignedSubBlocks }),
       })
       .where(eq(irrigationPointsTable.id, id))
       .returning();
@@ -865,5 +987,154 @@ export const ruleProfilesService = {
     await db.update(ruleProfilesTable)
       .set({ isActive: false, updatedAt: new Date() })
       .where(eq(ruleProfilesTable.id, id));
+  },
+};
+
+// ===========================================================================
+// EMBANKMENTS
+// ===========================================================================
+
+type RawEmbankment = typeof embankmentsTable.$inferSelect;
+
+/** Coerce numeric string columns returned by PostgreSQL into JS numbers. */
+function parseEmbankmentNumerics(emb: RawEmbankment) {
+  let polygonGeom: unknown = emb.polygonGeom;
+  if (typeof polygonGeom === 'string') {
+    try { polygonGeom = JSON.parse(polygonGeom); } catch { /* keep as string */ }
+  }
+  let centroid: unknown = emb.centroid;
+  if (typeof centroid === 'string') {
+    try { centroid = JSON.parse(centroid); } catch { /* keep as string */ }
+  }
+  return {
+    ...emb,
+    polygonGeom,
+    centroid,
+    areaM2:     emb.areaM2     != null ? parseFloat(emb.areaM2)     : null,
+    elevationM: emb.elevationM != null ? parseFloat(emb.elevationM) : null,
+  };
+}
+
+export const embankmentsService = {
+  async listByField(fieldId: string) {
+    const rows = await db.select()
+      .from(embankmentsTable)
+      .where(and(
+        eq(embankmentsTable.fieldId, fieldId),
+        eq(embankmentsTable.isActive, true),
+      ))
+      .orderBy(embankmentsTable.displayOrder, embankmentsTable.name);
+    return rows.map(parseEmbankmentNumerics);
+  },
+
+  async getById(id: string) {
+    const [emb] = await db.select()
+      .from(embankmentsTable)
+      .where(and(
+        eq(embankmentsTable.id, id),
+        eq(embankmentsTable.isActive, true),
+      ))
+      .limit(1);
+    if (!emb) throw new AppError(404, 'EMBANKMENT_NOT_FOUND', 'Pematang tidak ditemukan');
+    return parseEmbankmentNumerics(emb);
+  },
+
+  async create(fieldId: string, input: CreateEmbankmentInput) {
+    // Validate field exists
+    const [field] = await db.select({ id: fieldsTable.id })
+      .from(fieldsTable)
+      .where(eq(fieldsTable.id, fieldId))
+      .limit(1);
+    if (!field) throw new AppError(404, 'FIELD_NOT_FOUND', 'Lahan tidak ditemukan');
+
+    const geomJson = JSON.stringify(input.polygon_geom);
+    
+    // Dynamically calculate connected sub-blocks based on polygon overlap
+    const connectedSubBlocks = await calculateIntersectingSubBlocks(fieldId, input.polygon_geom);
+
+    const [inserted] = await db.insert(embankmentsTable).values({
+      fieldId,
+      name:               input.name,
+      code:               input.code,
+      polygonGeom:        geomJson,
+      elevationM:         input.elevation_m?.toString(),
+      soilType:           input.soil_type,
+      displayOrder:       input.display_order,
+      notes:              input.notes,
+      connectedSubBlocks: connectedSubBlocks,
+    }).returning();
+
+    if (!inserted) throw new AppError(500, 'CREATE_FAILED', 'Gagal membuat data pematang');
+    return parseEmbankmentNumerics(inserted);
+  },
+
+  async update(id: string, input: UpdateEmbankmentInput) {
+    const setParts: Record<string, unknown> = { updatedAt: new Date() };
+    if (input.name                 !== undefined) setParts['name']               = input.name;
+    if (input.code                 !== undefined) setParts['code']               = input.code;
+    if (input.elevation_m          !== undefined) setParts['elevationM']         = input.elevation_m?.toString();
+    if (input.soil_type            !== undefined) setParts['soilType']           = input.soil_type;
+    if (input.display_order        !== undefined) setParts['displayOrder']       = input.display_order;
+    if (input.notes                !== undefined) setParts['notes']              = input.notes;
+    
+    if (input.polygon_geom         !== undefined) {
+      setParts['polygonGeom'] = JSON.stringify(input.polygon_geom);
+      // Recalculate dynamic overlap
+      const [emb] = await db.select({ fieldId: embankmentsTable.fieldId })
+        .from(embankmentsTable)
+        .where(eq(embankmentsTable.id, id))
+        .limit(1);
+      if (emb) {
+        setParts['connectedSubBlocks'] = await calculateIntersectingSubBlocks(emb.fieldId, input.polygon_geom);
+      }
+    } else if (input.connected_sub_blocks !== undefined) {
+      setParts['connectedSubBlocks'] = input.connected_sub_blocks;
+    }
+
+    const [updated] = await db.update(embankmentsTable)
+      .set(setParts as Parameters<typeof db.update>[0] extends never ? never : Record<string, unknown>)
+      .where(eq(embankmentsTable.id, id))
+      .returning();
+    if (!updated) throw new AppError(404, 'EMBANKMENT_NOT_FOUND', 'Pematang tidak ditemukan');
+    return parseEmbankmentNumerics(updated);
+  },
+
+  /** Bulk import from GeoJSON FeatureCollection */
+  async importFromGeoJson(fieldId: string, input: ImportEmbankmentInput) {
+    // Validate field exists
+    const [field] = await db.select({ id: fieldsTable.id })
+      .from(fieldsTable)
+      .where(eq(fieldsTable.id, fieldId))
+      .limit(1);
+    if (!field) throw new AppError(404, 'FIELD_NOT_FOUND', 'Lahan tidak ditemukan');
+
+    const insertedIds: string[] = [];
+
+    for (const feature of input.geojson.features) {
+      const props    = feature.properties ?? {};
+      const name     = String(props[input.name_field] ?? `Pematang ${insertedIds.length + 1}`);
+      const code     = input.code_field ? String(props[input.code_field] ?? '') : undefined;
+      const geomJson = JSON.stringify(feature.geometry);
+
+      const connectedSubBlocks = await calculateIntersectingSubBlocks(fieldId, feature.geometry);
+
+      const [inserted] = await db.insert(embankmentsTable).values({
+        fieldId,
+        name,
+        code,
+        polygonGeom: geomJson,
+        connectedSubBlocks: connectedSubBlocks,
+      }).returning();
+
+      if (inserted) insertedIds.push(inserted.id);
+    }
+
+    return { inserted: insertedIds.length, ids: insertedIds };
+  },
+
+  async delete(id: string) {
+    await db.update(embankmentsTable)
+      .set({ isActive: false, updatedAt: new Date() })
+      .where(eq(embankmentsTable.id, id));
   },
 };

@@ -26,8 +26,10 @@ interface IrrigationPointMapEditorProps {
   };
   existingPoint?: any;
   pointType: 'source' | 'drain';
-  onSave: (coordinates: [number, number], imageWidth: number, imageHeight: number) => void;
+  onSave: (coordinates: [number, number] | [number, number][], imageWidth: number, imageHeight: number) => void;
   onClose: () => void;
+  subBlocks?: any[];
+  embankments?: any[];
 }
 
 export function IrrigationPointMapEditor({
@@ -35,7 +37,9 @@ export function IrrigationPointMapEditor({
   existingPoint,
   pointType,
   onSave,
-  onClose
+  onClose,
+  subBlocks = [],
+  embankments = []
 }: IrrigationPointMapEditorProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const [map, setMap] = useState<Map | null>(null);
@@ -59,6 +63,35 @@ export function IrrigationPointMapEditor({
     } else {
       return fromLonLat([lon, lat]);
     }
+  };
+
+  const convertGeometryToMapCoords = (geom: any, usePixels: boolean, imageWidth: number, imageHeight: number): any => {
+    if (!geom) return null;
+    if (geom.type === 'Polygon') {
+      return {
+        type: 'Polygon',
+        coordinates: geom.coordinates.map((ring: any[]) =>
+          ring.map(pt => geoToMapCoords(pt[0], pt[1], usePixels, imageWidth, imageHeight))
+        )
+      };
+    }
+    if (geom.type === 'MultiPolygon') {
+      return {
+        type: 'MultiPolygon',
+        coordinates: geom.coordinates.map((poly: any[]) =>
+          poly.map((ring: any[]) =>
+            ring.map(pt => geoToMapCoords(pt[0], pt[1], usePixels, imageWidth, imageHeight))
+          )
+        )
+      };
+    }
+    if (geom.type === 'Point') {
+      return {
+        type: 'Point',
+        coordinates: geoToMapCoords(geom.coordinates[0], geom.coordinates[1], usePixels, imageWidth, imageHeight)
+      };
+    }
+    return geom;
   };
 
   useEffect(() => {
@@ -94,34 +127,99 @@ export function IrrigationPointMapEditor({
 
       if (!active) return;
 
-      // Load existing point if exists
+      const featuresList: any[] = [];
+      const geojsonFormat = new GeoJSON();
+
+      // Load existing point(s) if exists
       if (existingPoint) {
         try {
           const geom = typeof existingPoint === 'string'
             ? JSON.parse(existingPoint)
             : existingPoint;
           
-          let coordsToLoad = geom.coordinates;
-          if (imageUrl && geom.type === 'Point') {
-            coordsToLoad = geoToMapCoords(geom.coordinates[0], geom.coordinates[1], true, imageWidth, imageHeight);
-          } else if (!imageUrl && geom.type === 'Point') {
-            coordsToLoad = fromLonLat(geom.coordinates);
+          if (geom.type === 'Point') {
+            const coords = geoToMapCoords(geom.coordinates[0], geom.coordinates[1], !!imageUrl, imageWidth, imageHeight);
+            const feature = geojsonFormat.readFeature({
+              type: 'Feature',
+              geometry: {
+                type: 'Point',
+                coordinates: coords
+              },
+              properties: {}
+            }) as any;
+            featuresList.push(feature);
+          } else if (geom.type === 'MultiPoint') {
+            geom.coordinates.forEach((pt: [number, number]) => {
+              const coords = geoToMapCoords(pt[0], pt[1], !!imageUrl, imageWidth, imageHeight);
+              const feature = geojsonFormat.readFeature({
+                type: 'Feature',
+                geometry: {
+                  type: 'Point',
+                  coordinates: coords
+                },
+                properties: {}
+              }) as any;
+              featuresList.push(feature);
+            });
           }
-
-          const geojsonFormat = new GeoJSON();
-          const feature = geojsonFormat.readFeatures({
-            type: 'Feature',
-            geometry: {
-              type: 'Point',
-              coordinates: coordsToLoad
-            },
-            properties: {}
-          });
-          vectorSource.current.clear();
-          vectorSource.current.addFeatures(Array.isArray(feature) ? feature : [feature]);
         } catch (e) {
           console.error("Failed to parse existing point in editor", e);
         }
+      }
+
+      // Add sub-blocks
+      if (subBlocks && subBlocks.length > 0) {
+        subBlocks.forEach((sb: any) => {
+          if (!sb.polygonGeom) return;
+          try {
+            const rawGeom = typeof sb.polygonGeom === 'string' ? JSON.parse(sb.polygonGeom) : sb.polygonGeom;
+            const convertedGeom = convertGeometryToMapCoords(rawGeom, !!imageUrl, imageWidth, imageHeight);
+            
+            const feature = geojsonFormat.readFeature({
+              type: 'Feature',
+              geometry: convertedGeom,
+              properties: {
+                id: sb.id,
+                name: sb.name,
+                isSubBlock: true
+              }
+            }) as any;
+            featuresList.push(feature);
+          } catch (e) {
+            console.error("Failed to render sub-block in map editor", e);
+          }
+        });
+      }
+
+      // Add embankments
+      if (embankments && embankments.length > 0) {
+        embankments.forEach((emb: any) => {
+          if (!emb.polygonGeom && !emb.polygon_geom) return;
+          try {
+            const rawGeom = typeof (emb.polygonGeom || emb.polygon_geom) === 'string'
+              ? JSON.parse(emb.polygonGeom || emb.polygon_geom)
+              : (emb.polygonGeom || emb.polygon_geom);
+            const convertedGeom = convertGeometryToMapCoords(rawGeom, !!imageUrl, imageWidth, imageHeight);
+            
+            const feature = geojsonFormat.readFeature({
+              type: 'Feature',
+              geometry: convertedGeom,
+              properties: {
+                id: emb.id,
+                name: emb.name,
+                isEmbankment: true
+              }
+            }) as any;
+            featuresList.push(feature);
+          } catch (e) {
+            console.error("Failed to render embankment in map editor", e);
+          }
+        });
+      }
+
+      vectorSource.current.clear();
+      if (featuresList.length > 0) {
+        vectorSource.current.addFeatures(featuresList);
       }
 
       if (!mapRef.current) return;
@@ -150,7 +248,45 @@ export function IrrigationPointMapEditor({
       // Vector Layer for drawing
       layers.push(new VectorLayer({
         source: vectorSource.current,
-        style: () => {
+        style: (feature) => {
+          const isSubBlock = feature.get('isSubBlock');
+          if (isSubBlock) {
+            return new Style({
+              stroke: new Stroke({
+                color: '#16a34a',
+                width: 2,
+              }),
+              fill: new Fill({
+                color: 'rgba(34, 197, 94, 0.15)',
+              }),
+              text: new Text({
+                text: feature.get('name'),
+                font: 'bold 11px Inter, sans-serif',
+                fill: new Fill({ color: '#166534' }),
+                stroke: new Stroke({ color: '#fff', width: 2 }),
+              }),
+            });
+          }
+
+          const isEmbankment = feature.get('isEmbankment');
+          if (isEmbankment) {
+            return new Style({
+              stroke: new Stroke({
+                color: '#9333ea',
+                width: 2.5,
+              }),
+              fill: new Fill({
+                color: 'rgba(147, 51, 234, 0.15)',
+              }),
+              text: new Text({
+                text: feature.get('name'),
+                font: 'bold 10px Inter, sans-serif',
+                fill: new Fill({ color: '#6b21a8' }),
+                stroke: new Stroke({ color: '#fff', width: 2 }),
+              }),
+            });
+          }
+
           return new Style({
             image: new CircleStyle({
               radius: 8,
@@ -186,6 +322,11 @@ export function IrrigationPointMapEditor({
 
       if (imageUrl) {
         initialMap.getView().fit(extent, { padding: [50, 50, 50, 50] });
+      } else if (featuresList.length > 0) {
+        const vectorExtent = vectorSource.current.getExtent();
+        if (vectorExtent && vectorExtent[0] !== Infinity && vectorExtent[0] !== -Infinity) {
+          initialMap.getView().fit(vectorExtent, { padding: [50, 50, 50, 50] });
+        }
       }
 
       setMap(initialMap);
@@ -208,17 +349,9 @@ export function IrrigationPointMapEditor({
       if (drawInteraction.current) map.removeInteraction(drawInteraction.current);
       setIsDrawing(false);
     } else {
-      // Clear previous features (only 1 point allowed)
-      vectorSource.current.clear();
-
       const draw = new Draw({
         source: vectorSource.current,
         type: 'Point'
-      });
-
-      draw.on('drawend', () => {
-        setIsDrawing(false);
-        map.removeInteraction(draw);
       });
 
       map.addInteraction(draw);
@@ -229,11 +362,16 @@ export function IrrigationPointMapEditor({
 
   const handleSave = () => {
     const features = vectorSource.current.getFeatures();
-    const pointFeature = features.find(f => f.getGeometry()?.getType() === 'Point');
-    if (!pointFeature) return alert('Silakan tentukan titik di peta terlebih dahulu');
+    const pointFeatures = features.filter(f => f.getGeometry()?.getType() === 'Point');
+    if (pointFeatures.length === 0) return alert('Silakan tentukan titik di peta terlebih dahulu');
 
-    const coords = (pointFeature.getGeometry() as any).getCoordinates();
-    onSave(coords, mapWidth, mapHeight);
+    if (pointFeatures.length === 1) {
+      const coords = (pointFeatures[0].getGeometry() as any).getCoordinates();
+      onSave(coords, mapWidth, mapHeight);
+    } else {
+      const coordsList = pointFeatures.map(f => (f.getGeometry() as any).getCoordinates());
+      onSave(coordsList as any, mapWidth, mapHeight);
+    }
   };
 
   return (

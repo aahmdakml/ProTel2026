@@ -98,6 +98,9 @@ export const subBlocks = mst.table('sub_blocks', {
   fieldId:      uuid('field_id').notNull().references(() => fields.id, { onDelete: 'restrict' }),
   name:         text('name').notNull(),
   code:         text('code'),
+  // unique_code is GENERATED ALWAYS AS (COALESCE(code, 'nocode') || '_' || id) STORED in PostgreSQL.
+  // Drizzle does not model generated columns natively; treat as read-only text.
+  uniqueCode:   text('unique_code'),
   polygonGeom:  geometryPolygon('polygon_geom').notNull(),
   // Generated columns (read-only — PostgreSQL generates these dari polygonGeom)
   areaM2:       numeric('area_m2', { precision: 12, scale: 2 }),
@@ -110,6 +113,32 @@ export const subBlocks = mst.table('sub_blocks', {
   createdAt:    timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt:    timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ---------------------------------------------------------------------------
+// mst.embankments  ← PEMATANG SAWAH (sub-block border / galengan)
+// ---------------------------------------------------------------------------
+export const embankments = mst.table('embankments', {
+  id:           uuid('id').primaryKey().defaultRandom(),
+  fieldId:      uuid('field_id').notNull().references(() => fields.id, { onDelete: 'restrict' }),
+  name:         text('name').notNull(),
+  // code is NOT unique — multiple embankments may share the same code across fields
+  code:         text('code'),
+  // unique_code is GENERATED ALWAYS AS (COALESCE(code, 'nocode') || '_' || id) STORED.
+  // Drizzle does not model generated columns natively; treat as read-only text.
+  uniqueCode:   text('unique_code'),
+  polygonGeom:  geometryPolygon('polygon_geom').notNull(),
+  areaM2:       numeric('area_m2', { precision: 12, scale: 2 }),
+  centroid:     geometryPoint('centroid'),
+  elevationM:   numeric('elevation_m', { precision: 7, scale: 2 }),
+  soilType:     text('soil_type'),
+  displayOrder: integer('display_order').notNull().default(0),
+  isActive:     boolean('is_active').notNull().default(true),
+  notes:        text('notes'),
+  connectedSubBlocks: jsonb('connected_sub_blocks').$type<string[]>().notNull().default([]),
+  createdAt:    timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:    timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 
 // ---------------------------------------------------------------------------
 // mst.flow_paths
@@ -133,6 +162,8 @@ export const irrigationPoints = mst.table('irrigation_points', {
   pointType:        text('point_type').notNull(),
   coordinatePoint:  geometryPoint('coordinate_point'),
   elevationM:       numeric('elevation_m', { precision: 7, scale: 2 }),
+  name:             text('name'),
+  assignedSubBlocks: jsonb('assigned_sub_blocks').$type<string[]>().notNull().default([]),
 });
 
 // ---------------------------------------------------------------------------

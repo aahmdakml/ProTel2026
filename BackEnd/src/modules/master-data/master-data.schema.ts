@@ -179,6 +179,31 @@ export const CreateIrrigationPointSchema = z.object({
   point_type:       z.string().min(1).max(100),
   coordinate_point: GeoJsonPointSchema.optional(),
   elevation_m:      z.coerce.number().optional(),
+  name:             z.string().max(200).optional(),
+  assigned_sub_blocks: z.array(z.string().uuid()).default([]),
 });
 
 export const UpdateIrrigationPointSchema = CreateIrrigationPointSchema.partial();
+
+// ---------------------------------------------------------------------------
+// Embankment schemas
+// ---------------------------------------------------------------------------
+
+export const CreateEmbankmentSchema = z.object({
+  name:                 z.string().min(1).max(200),
+  code:                 z.string().max(20).optional(),
+  polygon_geom:         GeoJsonPolygonSchema,
+  elevation_m:          z.coerce.number().optional(),
+  soil_type:            z.string().max(100).optional(),
+  display_order:        z.coerce.number().int().min(0).default(0),
+  notes:                z.string().max(2000).optional(),
+  connected_sub_blocks: z.array(z.string().uuid()).default([]),
+});
+
+export const UpdateEmbankmentSchema = CreateEmbankmentSchema.partial();
+
+export const ImportEmbankmentSchema = z.object({
+  geojson:     GeoJsonFeatureCollectionSchema,
+  name_field:  z.string().default('name'),
+  code_field:  z.string().optional(),
+});

@@ -1,5 +1,5 @@
 -- 1. Add field_id column to trx.sub_block_states
-ALTER TABLE trx.sub_block_states ADD COLUMN field_id UUID REFERENCES mst.fields(id);
+ALTER TABLE trx.sub_block_states ADD COLUMN IF NOT EXISTS field_id UUID REFERENCES mst.fields(id);
 
 -- 2. Populate field_id from sub_blocks
 UPDATE trx.sub_block_states s
@@ -12,7 +12,7 @@ ALTER TABLE trx.sub_block_states ALTER COLUMN field_id SET NOT NULL;
 
 
 -- 4. Add field_id column to trx.sub_block_current_states
-ALTER TABLE trx.sub_block_current_states ADD COLUMN field_id UUID REFERENCES mst.fields(id);
+ALTER TABLE trx.sub_block_current_states ADD COLUMN IF NOT EXISTS field_id UUID REFERENCES mst.fields(id);
 
 -- 5. Populate field_id from sub_blocks
 UPDATE trx.sub_block_current_states s

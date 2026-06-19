@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Plus, Search, MapPin, Loader2, AlertTriangle, Layers, Info, Pencil, Trash2 } from 'lucide-react';
+import { Plus, Search, MapPin, Loader2, AlertTriangle, Layers, Info, Pencil, Trash2, Fence } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { apiClient } from '@/api/client';
 import { CreateSubBlockModal } from './create-subblock-modal';
 import { CreateIrrigationPointModal } from './create-irrigation-point-modal';
+import { CreateSubBlockBorderModal } from './create-subblock-border-modal';
 import { EntityDetailModal } from '@/components/entity-detail-modal';
 
 interface Field {
@@ -37,6 +38,8 @@ interface IrrigationPoint {
   pointType: 'source' | 'drain';
   coordinatePoint: any;
   elevationM: string | null;
+  name?: string | null;
+  assignedSubBlocks?: string[] | null;
 }
 
 export function SubBlocksPage() {
@@ -56,7 +59,10 @@ export function SubBlocksPage() {
   
   const [detailEntity, setDetailEntity] = useState<any>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeTab, setActiveTab] = useState<'sub-blocks' | 'irrigation-points'>('sub-blocks');
+  const [isBorderModalOpen, setIsBorderModalOpen] = useState(false);
+  const [editingBorder, setEditingBorder] = useState<any>(null);
+  const [embankments, setEmbankments] = useState<any[]>([]);
+  const [activeTab, setActiveTab] = useState<'sub-blocks' | 'irrigation-points' | 'pematang-borders'>('sub-blocks');
 
   // 1. Fetch available fields on mount
   useEffect(() => {
@@ -75,7 +81,7 @@ export function SubBlocksPage() {
     fetchFields();
   }, []);
 
-  // 2. Fetch sub-blocks & irrigation points when field is selected
+  // 2. Fetch sub-blocks, irrigation points & embankments when field is selected
   const fetchSubBlocks = async (fieldId: string) => {
     if (!fieldId) return;
     try {
@@ -100,13 +106,25 @@ export function SubBlocksPage() {
     }
   };
 
+  const fetchEmbankments = async (fieldId: string) => {
+    if (!fieldId) return;
+    try {
+      const response = await apiClient.get(`/fields/${fieldId}/embankments`);
+      setEmbankments(response.data.data);
+    } catch (err) {
+      console.error("Failed to load embankments", err);
+    }
+  };
+
   useEffect(() => {
     if (selectedFieldId) {
       fetchSubBlocks(selectedFieldId);
       fetchIrrigationPoints(selectedFieldId);
+      fetchEmbankments(selectedFieldId);
     } else {
       setSubBlocks([]);
       setIrrigationPoints([]);
+      setEmbankments([]);
     }
   }, [selectedFieldId]);
 
@@ -130,6 +148,16 @@ export function SubBlocksPage() {
     }
   };
 
+  const handleDeleteEmbankment = async (id: string) => {
+    if (!confirm('Apakah Anda yakin ingin menghapus pematang ini?')) return;
+    try {
+      await apiClient.delete(`/embankments/${id}`);
+      if (selectedFieldId) fetchEmbankments(selectedFieldId);
+    } catch (err: any) {
+      alert(err.response?.data?.message || 'Gagal menghapus pematang');
+    }
+  };
+
   const filteredSubBlocks = subBlocks.filter(sb => 
     sb.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     (sb.code && sb.code.toLowerCase().includes(searchTerm.toLowerCase()))
@@ -138,6 +166,19 @@ export function SubBlocksPage() {
   const filteredPoints = irrigationPoints.filter(ip => 
     ip.pointType.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  const filteredEmbankments = embankments.filter(emb => 
+    emb.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (emb.code && emb.code.toLowerCase().includes(searchTerm.toLowerCase()))
+  );
+
+  const getConnectedSubBlockNames = (connectedIds: string[] | null) => {
+    if (!connectedIds || !Array.isArray(connectedIds) || connectedIds.length === 0) return '-';
+    return connectedIds.map(id => {
+      const sb = subBlocks.find(s => s.id === id);
+      return sb ? sb.name : 'Sub-block tidak diketahui';
+    }).join(', ');
+  };
 
   return (
     <div className="flex flex-col gap-6 animate-in fade-in">
@@ -149,19 +190,28 @@ export function SubBlocksPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          {activeTab === 'sub-blocks' ? (
-            <Button 
-              onClick={() => setIsModalOpen(true)} 
+          {activeTab === 'sub-blocks' && (
+            <Button
+              onClick={() => setIsModalOpen(true)}
               disabled={!selectedFieldId}
             >
               <Plus className="mr-2 h-4 w-4" /> Tambah Sub-block
             </Button>
-          ) : (
-            <Button 
-              onClick={() => setIsPointModalOpen(true)} 
+          )}
+          {activeTab === 'irrigation-points' && (
+            <Button
+              onClick={() => setIsPointModalOpen(true)}
               disabled={!selectedFieldId}
             >
               <Plus className="mr-2 h-4 w-4" /> Tambah Titik Irigasi
+            </Button>
+          )}
+          {activeTab === 'pematang-borders' && (
+            <Button
+              onClick={() => setIsBorderModalOpen(true)}
+              disabled={!selectedFieldId}
+            >
+              <Plus className="mr-2 h-4 w-4" /> Tambah Pematang
             </Button>
           )}
         </div>
@@ -225,6 +275,20 @@ export function SubBlocksPage() {
                 }`}
               >
                 Titik Irigasi ({irrigationPoints.length})
+              </button>
+              <button
+                onClick={() => {
+                  setActiveTab('pematang-borders');
+                  setSearchTerm('');
+                }}
+                className={`pb-2 text-sm font-semibold border-b-2 transition-all flex items-center gap-1.5 ${
+                  activeTab === 'pematang-borders'
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                <Fence className="h-3.5 w-3.5" />
+                Pematang Sawah ({embankments.length})
               </button>
             </div>
           </div>
@@ -349,6 +413,88 @@ export function SubBlocksPage() {
                 </table>
               </div>
             )
+          ) : activeTab === 'pematang-borders' ? (
+            // PEMATANG BORDERS — Real UI
+            embankments.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <Fence className="h-12 w-12 text-muted-foreground mb-4 opacity-50" />
+                <h3 className="text-lg font-medium">Belum ada pematang sawah</h3>
+                <p className="text-muted-foreground max-w-sm mt-1 mb-6">
+                  Tambahkan batas pematang (galengan) antar petak sawah pada lahan ini.
+                </p>
+                <Button onClick={() => setIsBorderModalOpen(true)} disabled={!selectedFieldId}>
+                  <Plus className="mr-2 h-4 w-4" /> Tambah Pematang
+                </Button>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left whitespace-nowrap">
+                  <thead className="bg-muted/50 text-muted-foreground uppercase text-xs border-b">
+                    <tr>
+                      <th className="px-6 py-3 font-medium">Nama Pematang</th>
+                      <th className="px-6 py-3 font-medium">Kode</th>
+                      <th className="px-6 py-3 font-medium">Elevasi</th>
+                      <th className="px-6 py-3 font-medium">Tipe Tanah</th>
+                      <th className="px-6 py-3 font-medium">Koneksi Sub-block</th>
+                      <th className="px-6 py-3 font-medium text-right">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {filteredEmbankments.map((emb) => (
+                      <tr key={emb.id} className="hover:bg-muted/30 transition-colors">
+                        <td className="px-6 py-4 font-medium text-foreground flex items-center gap-2">
+                          {emb.name}
+                          {emb.polygonGeom || emb.polygon_geom ? (
+                            <Badge variant="outline" className="text-[10px] bg-purple-500/10 text-purple-600 border-purple-500/20 py-0 px-1 h-5 flex items-center gap-0.5">
+                              <MapPin className="h-3 w-3" /> Terpetakan
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20 py-0 px-1 h-5 flex items-center gap-0.5">
+                              <AlertTriangle className="h-3 w-3" /> No Map
+                            </Badge>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 code font-mono text-xs">{emb.code || '-'}</td>
+                        <td className="px-6 py-4">{emb.elevationM || emb.elevation_m ? `${emb.elevationM || emb.elevation_m} m` : '-'}</td>
+                        <td className="px-6 py-4 capitalize">{emb.soilType || emb.soil_type || '-'}</td>
+                        <td className="px-6 py-4 text-xs text-muted-foreground truncate max-w-xs" title={getConnectedSubBlockNames(emb.connectedSubBlocks || emb.connected_sub_blocks)}>
+                          {getConnectedSubBlockNames(emb.connectedSubBlocks || emb.connected_sub_blocks)}
+                        </td>
+                        <td className="px-6 py-4 text-right flex justify-end gap-2">
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="h-8 w-8 text-muted-foreground"
+                            onClick={() => setDetailEntity(emb)}
+                          >
+                            <Info className="h-4 w-4" />
+                          </Button>
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="h-8 w-8 text-primary"
+                            onClick={() => {
+                              setEditingBorder(emb);
+                              setIsBorderModalOpen(true);
+                            }}
+                          >
+                            <Pencil className="h-4 w-4" /> 
+                          </Button>
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="h-8 w-8 text-destructive"
+                            onClick={() => handleDeleteEmbankment(emb.id)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
           ) : (
             // IRRIGATION POINTS TABLE
             irrigationPoints.length === 0 ? (
@@ -367,25 +513,18 @@ export function SubBlocksPage() {
                 <table className="w-full text-sm text-left whitespace-nowrap">
                   <thead className="bg-muted/50 text-muted-foreground uppercase text-xs border-b">
                     <tr>
-                      <th className="px-6 py-3 font-medium">ID</th>
+                      <th className="px-6 py-3 font-medium">Nama</th>
                       <th className="px-6 py-3 font-medium">Tipe Titik</th>
-                      <th className="px-6 py-3 font-medium">Koordinat (Lng, Lat)</th>
+                      <th className="px-6 py-3 font-medium">Sub-blok Terhubung</th>
                       <th className="px-6 py-3 font-medium">Elevasi</th>
                       <th className="px-6 py-3 font-medium text-right">Aksi</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y">
                     {filteredPoints.map((ip) => {
-                      const geom = typeof ip.coordinatePoint === 'string' 
-                        ? JSON.parse(ip.coordinatePoint) 
-                        : ip.coordinatePoint;
-                      const coordsText = geom?.coordinates
-                        ? `${geom.coordinates[0].toFixed(5)}, ${geom.coordinates[1].toFixed(5)}`
-                        : '-';
-                        
                       return (
                         <tr key={ip.id} className="hover:bg-muted/30 transition-colors">
-                          <td className="px-6 py-4 font-mono text-xs">{ip.id.substring(0, 8)}...</td>
+                          <td className="px-6 py-4 font-semibold text-sm">{ip.name || '-'}</td>
                           <td className="px-6 py-4">
                             {ip.pointType === 'source' ? (
                               <Badge variant="outline" className="bg-green-500/10 text-green-600 border-green-500/20 py-0.5 px-2">
@@ -397,7 +536,15 @@ export function SubBlocksPage() {
                               </Badge>
                             )}
                           </td>
-                          <td className="px-6 py-4 font-mono text-xs">{coordsText}</td>
+                          <td className="px-6 py-4 text-sm">
+                            {(() => {
+                              const assigned = ip.assignedSubBlocks ?? [];
+                              if (assigned.length === 0) return <span className="text-muted-foreground">—</span>;
+                              return assigned
+                                .map(id => subBlocks.find(sb => sb.id === id)?.name || id)
+                                .join(', ');
+                            })()}
+                          </td>
                           <td className="px-6 py-4">{ip.elevationM ? `${ip.elevationM} m` : '-'}</td>
                           <td className="px-6 py-4 text-right flex justify-end gap-2">
                             <Button 
@@ -461,10 +608,25 @@ export function SubBlocksPage() {
         />
       )}
 
+      {isBorderModalOpen && (
+        <CreateSubBlockBorderModal
+          isOpen={isBorderModalOpen}
+          fieldId={selectedFieldId}
+          initialData={editingBorder}
+          onClose={() => {
+            setIsBorderModalOpen(false);
+            setEditingBorder(null);
+          }}
+          onSuccess={() => {
+            if (selectedFieldId) fetchEmbankments(selectedFieldId);
+          }}
+        />
+      )}
+
       <EntityDetailModal 
         isOpen={!!detailEntity} 
         onClose={() => setDetailEntity(null)} 
-        title="Detail Petak (Sub-block)"
+        title={detailEntity?.polygonGeom && !detailEntity?.devices ? "Detail Pematang Sawah" : "Detail Petak (Sub-block)"}
         data={detailEntity}
       />
     </div>

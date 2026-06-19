@@ -5,6 +5,8 @@ import {
   flowPaths        as flowPathsTable,
   irrigationRuleProfiles as ruleProfilesTable,
   cropCycles       as cropCyclesTable,
+  embankments      as embankmentsTable,
+  fields           as fieldsTable,
 } from '@/db/schema/mst';
 import {
   subBlockCurrentStates as currentStatesTable,
@@ -101,20 +103,48 @@ export async function runWaterRouting(
     return;
   }
 
-  // Flow paths (edges)
-  const flowPathRows = await db
+  // Load embankments for this field to derive sub-block connections
+  const embankmentRows = await db
     .select({
-      fromSubBlockId: flowPathsTable.fromSubBlockId,
-      toSubBlockId:   flowPathsTable.toSubBlockId,
+      connectedSubBlocks: embankmentsTable.connectedSubBlocks,
     })
-    .from(flowPathsTable)
+    .from(embankmentsTable)
     .where(and(
-      sql`${flowPathsTable.fromSubBlockId} IN (SELECT id FROM mst.sub_blocks WHERE field_id = ${fieldId})`,
-      eq(flowPathsTable.isActive, true),
+      eq(embankmentsTable.fieldId, fieldId),
+      eq(embankmentsTable.isActive, true)
     ));
 
-  if (flowPathRows.length === 0) {
-    logger.warn(logCtx, 'Water routing skipped — no active flow_paths defined for field');
+  const derivedConnections: Array<{ from: string; to: string }> = [];
+
+  for (const emb of embankmentRows) {
+    const connected = emb.connectedSubBlocks ?? [];
+    for (let i = 0; i < connected.length; i++) {
+      for (let j = i + 1; j < connected.length; j++) {
+        derivedConnections.push({ from: connected[i], to: connected[j] });
+        derivedConnections.push({ from: connected[j], to: connected[i] });
+      }
+    }
+  }
+
+  // Fallback: if no embankment-derived connections, try loading from saved irrigationEdges on field
+  if (derivedConnections.length === 0) {
+    const [field] = await db
+      .select({ irrigationEdges: fieldsTable.irrigationEdges })
+      .from(fieldsTable)
+      .where(eq(fieldsTable.id, fieldId))
+      .limit(1);
+
+    if (field?.irrigationEdges && Array.isArray(field.irrigationEdges)) {
+      field.irrigationEdges.forEach((edge: any) => {
+        if (edge && edge.from && edge.to) {
+          derivedConnections.push({ from: edge.from, to: edge.to });
+        }
+      });
+    }
+  }
+
+  if (derivedConnections.length === 0) {
+    logger.warn(logCtx, 'Water routing skipped — no active flow paths/embankments defined for field');
     return;
   }
 
@@ -179,11 +209,11 @@ export async function runWaterRouting(
   const edges: Array<{ u: number; v: number; centroid_u: string; centroid_v: string }> = [];
   const sbEwktMap = new Map(subBlockRows.map(sb => [sb.id, sb.centroidEwkt]));
 
-  for (const fp of flowPathRows) {
-    const u = uuidToIdx.get(fp.fromSubBlockId);
-    const v = uuidToIdx.get(fp.toSubBlockId);
-    const cu = sbEwktMap.get(fp.fromSubBlockId);
-    const cv = sbEwktMap.get(fp.toSubBlockId);
+  for (const conn of derivedConnections) {
+    const u = uuidToIdx.get(conn.from);
+    const v = uuidToIdx.get(conn.to);
+    const cu = sbEwktMap.get(conn.from);
+    const cv = sbEwktMap.get(conn.to);
 
     if (u === undefined || v === undefined || !cu || !cv) continue;
     edges.push({ u, v, centroid_u: cu, centroid_v: cv });
