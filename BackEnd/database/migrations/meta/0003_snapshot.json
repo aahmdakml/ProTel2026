@@ -1,6 +1,6 @@
 {
-  "id": "6b04b671-f7a0-48e2-8a7d-151be14a45e4",
-  "prevId": "00000000-0000-0000-0000-000000000000",
+  "id": "0e4fe8cf-3f29-4d6a-91ad-cd2ef9765384",
+  "prevId": "6b04b671-f7a0-48e2-8a7d-151be14a45e4",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2013,6 +2013,138 @@
             "id"
           ],
           "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "trx.dss_tasks": {
+      "name": "dss_tasks",
+      "schema": "trx",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "field_id": {
+          "name": "field_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sub_block_id": {
+          "name": "sub_block_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "task_type": {
+          "name": "task_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "command_text": {
+          "name": "command_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "priority_score": {
+          "name": "priority_score",
+          "type": "numeric(3, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'PENDING'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_by": {
+          "name": "completed_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "dss_tasks_field_id_fields_id_fk": {
+          "name": "dss_tasks_field_id_fields_id_fk",
+          "tableFrom": "dss_tasks",
+          "tableTo": "fields",
+          "schemaTo": "mst",
+          "columnsFrom": [
+            "field_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "dss_tasks_sub_block_id_sub_blocks_id_fk": {
+          "name": "dss_tasks_sub_block_id_sub_blocks_id_fk",
+          "tableFrom": "dss_tasks",
+          "tableTo": "sub_blocks",
+          "schemaTo": "mst",
+          "columnsFrom": [
+            "sub_block_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "dss_tasks_completed_by_users_id_fk": {
+          "name": "dss_tasks_completed_by_users_id_fk",
+          "tableFrom": "dss_tasks",
+          "tableTo": "users",
+          "schemaTo": "mst",
+          "columnsFrom": [
+            "completed_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
