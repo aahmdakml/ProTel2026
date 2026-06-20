@@ -95,9 +95,9 @@ export async function runWaterRouting(
   const subBlockRows = await db
     .select({
       id: subBlocksTable.id,
-      code: subBlocksTable.code,
       areaM2: subBlocksTable.areaM2,
       elevationM: subBlocksTable.elevationM,
+      elevationCalibration: subBlocksTable.elevationCalibration,
       centroidEwkt: sql<string>`ST_AsEWKT(${subBlocksTable.centroid})`,
     })
     .from(subBlocksTable)
@@ -205,11 +205,11 @@ export async function runWaterRouting(
   const uuidToCode = new Map<string, string>();
 
   subBlockRows.forEach((sb) => {
-    uuidToCode.set(sb.id, sb.code || sb.id.substring(0,8));
+    uuidToCode.set(sb.id, sb.code || sb.id.substring(0, 8));
   });
 
   const allNodes = [...subBlockRows, ...ipRows];
-  
+
   allNodes.forEach((n, idx) => {
     uuidToIdx.set(n.id, idx);
     idxToUuid.set(idx, n.id);
@@ -238,7 +238,7 @@ export async function runWaterRouting(
       area: parseFloat(n.areaM2 ?? '100'),
       water_height: waterHeightM,
       optimal_height: optimalHeightM,
-      elevation: parseFloat(n.elevationM ?? '0'),
+      elevation: parseFloat(sb.elevationM ?? '0') + parseFloat(sb.elevationCalibration ?? '0'),
     };
   });
 
