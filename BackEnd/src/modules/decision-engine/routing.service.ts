@@ -93,9 +93,10 @@ export async function runWaterRouting(
   // Sub-blocks: id, area, elevation, centroid sebagai EWKT
   const subBlockRows = await db
     .select({
-      id: subBlocksTable.id,
-      areaM2: subBlocksTable.areaM2,
-      elevationM: subBlocksTable.elevationM,
+      id:          subBlocksTable.id,
+      areaM2:      subBlocksTable.areaM2,
+      elevationM:  subBlocksTable.elevationM,
+      elevationCalibration: subBlocksTable.elevationCalibration,
       centroidEwkt: sql<string>`ST_AsEWKT(${subBlocksTable.centroid})`,
     })
     .from(subBlocksTable)
@@ -236,7 +237,7 @@ export async function runWaterRouting(
       area: parseFloat(n.areaM2 ?? '100'),
       water_height: waterHeightM,
       optimal_height: optimalHeightM,
-      elevation: parseFloat(n.elevationM ?? '0'),
+      elevation:      parseFloat(sb.elevationM ?? '0') + parseFloat(sb.elevationCalibration ?? '0'),
     };
   });
 
