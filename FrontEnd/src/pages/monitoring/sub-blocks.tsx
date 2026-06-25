@@ -26,6 +26,7 @@ interface SubBlock {
   name: string;
   code: string | null;
   elevationM: string | null;
+  elevationCalibration?: string | number | null;
   soilType: string | null;
   isActive: boolean;
   polygonGeom?: any;
@@ -353,7 +354,15 @@ export function SubBlocksPage() {
                           )}
                         </td>
                         <td className="px-6 py-4 code font-mono text-xs">{sb.code || '-'}</td>
-                        <td className="px-6 py-4">{sb.elevationM ? `${sb.elevationM} m` : '-'}</td>
+                        <td className="px-6 py-4">
+                          {(() => {
+                            if (sb.elevationCalibration !== null && sb.elevationCalibration !== undefined) {
+                              const cal = parseFloat(sb.elevationCalibration.toString());
+                              return `${cal.toFixed(2)} m`;
+                            }
+                            return sb.elevationM ? `${parseFloat(sb.elevationM).toFixed(2)} m` : '-';
+                          })()}
+                        </td>
                         <td className="px-6 py-4 capitalize">{sb.soilType || '-'}</td>
                         <td className="px-6 py-4">
                           {sb.devices && sb.devices.length > 0 ? (

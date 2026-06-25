@@ -65,6 +65,7 @@ export async function runWaterRouting(
     subBlockId: recsTable.subBlockId,
     recommendationType: recsTable.recommendationType,
     priorityScore: recsTable.priorityScore,
+    commandText: recsTable.commandText,
   })
     .from(recsTable)
     .where(and(
@@ -94,6 +95,7 @@ export async function runWaterRouting(
   const subBlockRows = await db
     .select({
       id:          subBlocksTable.id,
+      code:        subBlocksTable.code,
       areaM2:      subBlocksTable.areaM2,
       elevationM:  subBlocksTable.elevationM,
       elevationCalibration: subBlocksTable.elevationCalibration,
@@ -214,6 +216,11 @@ export async function runWaterRouting(
     idxToUuid.set(idx, n.id);
   });
 
+  const firstCalRow = subBlockRows.find(r => r.elevationCalibration !== null && r.elevationM !== null);
+  const fieldCalibrationOffset = firstCalRow && firstCalRow.elevationCalibration && firstCalRow.elevationM
+    ? parseFloat(firstCalRow.elevationCalibration.toString()) - parseFloat(firstCalRow.elevationM.toString())
+    : 0;
+
   // Build nodes[] payload untuk Python
   const nodes = allNodes.map(n => {
     if ('pointType' in n) {
@@ -221,7 +228,7 @@ export async function runWaterRouting(
         area: 0.0001,
         water_height: fieldAvgM,
         optimal_height: fieldAvgM,
-        elevation: parseFloat(n.elevationM ?? '0'),
+        elevation: parseFloat(n.elevationM ?? '0') + fieldCalibrationOffset,
       };
     }
 
@@ -237,7 +244,9 @@ export async function runWaterRouting(
       area: parseFloat(n.areaM2 ?? '100'),
       water_height: waterHeightM,
       optimal_height: optimalHeightM,
-      elevation:      parseFloat(sb.elevationM ?? '0') + parseFloat(sb.elevationCalibration ?? '0'),
+      elevation: n.elevationCalibration !== null
+        ? parseFloat(n.elevationCalibration.toString())
+        : parseFloat(n.elevationM ?? '0'),
     };
   });
 
