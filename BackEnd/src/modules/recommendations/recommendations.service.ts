@@ -153,7 +153,7 @@ export async function submitFeedback(
     eventsToInsert.push({
       fieldId: rec.fieldId,
       subBlockId: rec.subBlockId,
-      eventType: 'snooze_dss',
+      eventType: 'maintenance',
       eventDate: new Date().toISOString().split('T')[0],
       attentionFlagText: 'Pematang Jebol/Bocor',
       flagActiveHours: 999999, // practically forever
@@ -167,7 +167,7 @@ export async function submitFeedback(
       eventsToInsert.push({
         fieldId: rec.fieldId,
         subBlockId: input.impacted_sub_block_id,
-        eventType: 'snooze_dss',
+        eventType: 'maintenance',
         eventDate: new Date().toISOString().split('T')[0],
         attentionFlagText: 'Pematang Jebol/Bocor',
         flagActiveHours: 999999,

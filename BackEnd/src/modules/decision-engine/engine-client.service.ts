@@ -279,7 +279,7 @@ export async function runDecisionCycleForField(
           return baseRule;
         })() : null,
         management_flags: flags.map(f => ({
-          event_type: f.eventType,
+          event_type: (f.eventType === 'maintenance' || f.eventType === 'snooze_dss') && f.attentionFlagText?.includes('Pematang') ? 'snooze_dss' : f.eventType,
           flag_text: f.attentionFlagText,
           expires_at: f.flagExpiresAt?.toISOString() ?? new Date().toISOString(),
         })),
@@ -352,7 +352,6 @@ export async function runDecisionCycleForField(
         attentionFlagsJson: rec.attention_flags_json as object,
         operatorWarningText: rec.operator_warning_text,
         validUntil,
-        engineVersion: result.engine_version,
         feedbackStatus: 'pending',
       }).onConflictDoNothing(); // idempotent re-runs
     }

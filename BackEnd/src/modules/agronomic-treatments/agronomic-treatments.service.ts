@@ -26,15 +26,15 @@ export class AgronomicTreatmentsService {
       .insert(agronomicTreatments)
       .values({
         fieldId,
-        subBlockId: data.subBlockId,
-        cropCycleId: data.cropCycleId,
+        subBlockId: data.subBlockId || null,
+        cropCycleId: data.cropCycleId || null,
         treatmentType: data.treatmentType,
         productName: data.productName,
         targetWaterLevelCm: data.targetWaterLevelCm.toString(),
         activeDurationHours: data.activeDurationHours,
         overrideExpiresAt,
-        reportedBy: userId,
-        notes: data.notes,
+        reportedBy: userId || null,
+        notes: data.notes || null,
       })
       .returning();
 

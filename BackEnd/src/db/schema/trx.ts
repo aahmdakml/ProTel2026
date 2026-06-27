@@ -375,7 +375,6 @@ export const irrigationRecommendations = trx.table('irrigation_recommendations',
   feedbackAt:                timestamp('feedback_at', { withTimezone: true }),
   hasFeedback:               boolean('has_feedback').notNull().default(false),
   lastFeedbackAt:            timestamp('last_feedback_at', { withTimezone: true }),
-  engineVersion:             text('engine_version'),
   // Floyd-Warshall routing enrichment
   routePathIds:              jsonb('route_path_ids'),          // UUID[] sub_block berurutan source→target
   routingScore:              numeric('routing_score', { precision: 10, scale: 4 }), // total bobot rute

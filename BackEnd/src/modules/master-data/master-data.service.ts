@@ -232,7 +232,7 @@ async function calculateIntersectingSubBlocks(fieldId: string, polygonGeom: any)
     .where(and(
       eq(subBlocksTable.fieldId, fieldId),
       eq(subBlocksTable.isActive, true),
-      sql`ST_Intersects(${subBlocksTable.polygonGeom}, ST_SetSRID(ST_GeomFromGeoJSON(${geomJson}), 4326))`
+      sql`ST_Intersects(${subBlocksTable.polygonGeom}::geometry, ST_GeomFromGeoJSON(${geomJson}))`
     ));
   
   return result.map(row => row.id);
@@ -275,9 +275,9 @@ export const subBlocksService = {
       name: subBlocksTable.name,
       code: subBlocksTable.code,
       uniqueCode: subBlocksTable.uniqueCode,
-      polygonGeom: sql<string>`ST_AsGeoJSON(${subBlocksTable.polygonGeom})`,
+      polygonGeom: subBlocksTable.polygonGeom,
       areaM2: subBlocksTable.areaM2,
-      centroid: sql<string | null>`ST_AsGeoJSON(${subBlocksTable.centroid})`,
+      centroid: subBlocksTable.centroid,
       elevationM: subBlocksTable.elevationM,
       elevationCalibration: subBlocksTable.elevationCalibration,
       soilType: subBlocksTable.soilType,
@@ -321,9 +321,9 @@ export const subBlocksService = {
       name: subBlocksTable.name,
       code: subBlocksTable.code,
       uniqueCode: subBlocksTable.uniqueCode,
-      polygonGeom: sql<string>`ST_AsGeoJSON(${subBlocksTable.polygonGeom})`,
+      polygonGeom: subBlocksTable.polygonGeom,
       areaM2: subBlocksTable.areaM2,
-      centroid: sql<string | null>`ST_AsGeoJSON(${subBlocksTable.centroid})`,
+      centroid: subBlocksTable.centroid,
       elevationM: subBlocksTable.elevationM,
       elevationCalibration: subBlocksTable.elevationCalibration,
       soilType: subBlocksTable.soilType,
@@ -359,24 +359,38 @@ export const subBlocksService = {
   async create(fieldId: string, input: CreateSubBlockInput) {
     const geomJson = JSON.stringify(input.polygon_geom);
     
-    const [inserted] = await db.insert(subBlocksTable).values({
-      fieldId,
-      name:                 input.name,
-      code:                 input.code,
-      polygonGeom:          geomJson,
-      elevationM:           input.elevation_m?.toString(),
-      elevationCalibration: input.elevation_calibration?.toString(),
-      soilType:             input.soil_type,
-      displayOrder:         input.display_order,
-      notes:                input.notes,
-    }).returning();
+    // Self-healing: bersihkan kode unik pada sub-block lama yang sudah dihapus (inactive) agar tidak memicu 409 Conflict
+    if (input.code) {
+      await db.update(subBlocksTable)
+        .set({ code: sql`code || '_del_' || floor(extract(epoch from now()))`, updatedAt: new Date() })
+        .where(and(eq(subBlocksTable.fieldId, fieldId), eq(subBlocksTable.code, input.code), eq(subBlocksTable.isActive, false)));
+    }
 
-    if (!inserted) throw new AppError(500, 'CREATE_FAILED', 'Gagal membuat sub-block');
-    
-    // Recalculate connected sub-blocks for embankments in this field
-    await recalculateFieldEmbankments(fieldId);
-    
-    return inserted;
+    try {
+      const [inserted] = await db.insert(subBlocksTable).values({
+        fieldId,
+        name:                 input.name,
+        code:                 input.code,
+        polygonGeom:          geomJson,
+        elevationM:           input.elevation_m?.toString(),
+        elevationCalibration: input.elevation_calibration?.toString(),
+        soilType:             input.soil_type,
+        displayOrder:         input.display_order,
+        notes:                input.notes,
+      }).returning();
+
+      if (!inserted) throw new AppError(500, 'CREATE_FAILED', 'Gagal membuat sub-block');
+      
+      // Recalculate connected sub-blocks for embankments in this field
+      await recalculateFieldEmbankments(fieldId);
+      
+      return inserted;
+    } catch (e: any) {
+      if (e?.code === '23505') {
+        throw new AppError(409, 'DUPLICATE_CODE', `Kode petak '${input.code}' sudah digunakan di lahan ini. Silakan gunakan kode lain.`);
+      }
+      throw e;
+    }
   },
 
   async update(subBlockId: string, input: UpdateSubBlockInput) {
@@ -433,7 +447,11 @@ export const subBlocksService = {
 
   async delete(subBlockId: string) {
     const [updated] = await db.update(subBlocksTable)
-      .set({ isActive: false, updatedAt: new Date() })
+      .set({ 
+        isActive: false, 
+        code: sql`code || '_del_' || floor(extract(epoch from now()))`,
+        updatedAt: new Date() 
+      })
       .where(eq(subBlocksTable.id, subBlockId))
       .returning();
       
@@ -790,7 +808,7 @@ async function calculateAssignedSubBlocksForPoint(fieldId: string, coordinatePoi
   .where(and(
     eq(embankmentsTable.fieldId, fieldId),
     eq(embankmentsTable.isActive, true),
-    sql`ST_Intersects(ST_SetSRID(ST_GeomFromGeoJSON(${embankmentsTable.polygonGeom}), 4326), ST_SetSRID(ST_GeomFromGeoJSON(${geomJson}), 4326))`
+    sql`ST_Intersects(${embankmentsTable.polygonGeom}::geometry, ST_GeomFromGeoJSON(${geomJson}))`
   ));
 
   for (const emb of intersectingEmbankments) {
@@ -806,7 +824,7 @@ async function calculateAssignedSubBlocksForPoint(fieldId: string, coordinatePoi
   .where(and(
     eq(subBlocksTable.fieldId, fieldId),
     eq(subBlocksTable.isActive, true),
-    sql`ST_Intersects(${subBlocksTable.polygonGeom}, ST_SetSRID(ST_GeomFromGeoJSON(${geomJson}), 4326))`
+    sql`ST_Intersects(${subBlocksTable.polygonGeom}::geometry, ST_GeomFromGeoJSON(${geomJson}))`
   ));
 
   intersectingSubBlocks.forEach(row => subBlockIds.add(row.id));
