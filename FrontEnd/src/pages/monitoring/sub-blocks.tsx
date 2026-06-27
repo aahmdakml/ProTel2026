@@ -39,6 +39,7 @@ interface IrrigationPoint {
   pointType: 'source' | 'drain';
   coordinatePoint: any;
   elevationM: string | null;
+  callibratedElevation?: string | number | null;
   name?: string | null;
   assignedSubBlocks?: string[] | null;
 }
@@ -554,7 +555,14 @@ export function SubBlocksPage() {
                                 .join(', ');
                             })()}
                           </td>
-                          <td className="px-6 py-4">{ip.elevationM ? `${ip.elevationM} m` : '-'}</td>
+                          <td className="px-6 py-4">
+                            {(() => {
+                              const elev = ip.callibratedElevation !== null && ip.callibratedElevation !== undefined
+                                ? ip.callibratedElevation
+                                : ip.elevationM;
+                              return elev ? `${parseFloat(elev.toString()).toFixed(2)} m` : '-';
+                            })()}
+                          </td>
                           <td className="px-6 py-4 text-right flex justify-end gap-2">
                             <Button 
                               variant="ghost" 

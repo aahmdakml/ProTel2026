@@ -115,6 +115,7 @@ export async function runWaterRouting(
       id: irrigationPointsTable.id,
       pointType: irrigationPointsTable.pointType,
       elevationM: irrigationPointsTable.elevationM,
+      callibratedElevation: irrigationPointsTable.callibratedElevation,
       assignedSubBlocks: irrigationPointsTable.assignedSubBlocks,
       centroidEwkt: sql<string>`ST_AsEWKT(${irrigationPointsTable.coordinatePoint})`,
     })
@@ -228,7 +229,9 @@ export async function runWaterRouting(
         area: 0.0001,
         water_height: fieldAvgM,
         optimal_height: fieldAvgM,
-        elevation: parseFloat(n.elevationM ?? '0') + fieldCalibrationOffset,
+        elevation: n.callibratedElevation !== null
+          ? parseFloat(n.callibratedElevation.toString())
+          : parseFloat(n.elevationM ?? '0') + fieldCalibrationOffset,
       };
     }
 

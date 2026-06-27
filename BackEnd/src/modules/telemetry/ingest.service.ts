@@ -286,6 +286,12 @@ export async function processBatch(payload: BatchPayload): Promise<BatchResult> 
                 updatedAt: new Date(),
               })
               .where(eq(subBlocksTable.fieldId, device.fieldId));
+
+            await db.update(irrigationPointsTable)
+              .set({
+                callibratedElevation: sql`COALESCE(${irrigationPointsTable.elevationM}, 0) + ${calibrationOffset.toFixed(2)}`,
+              })
+              .where(eq(irrigationPointsTable.fieldId, device.fieldId));
           }
         }
 

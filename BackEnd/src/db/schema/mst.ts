@@ -163,6 +163,7 @@ export const irrigationPoints = mst.table('irrigation_points', {
   pointType:        text('point_type').notNull(),
   coordinatePoint:  geometryPoint('coordinate_point'),
   elevationM:       numeric('elevation_m', { precision: 7, scale: 2 }),
+  callibratedElevation: numeric('callibrated_elevation', { precision: 7, scale: 2 }),
   name:             text('name'),
   assignedSubBlocks: jsonb('assigned_sub_blocks').$type<string[]>().notNull().default([]),
 });

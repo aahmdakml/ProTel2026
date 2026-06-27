@@ -181,6 +181,7 @@ export const CreateIrrigationPointSchema = z.object({
   point_type:       z.string().min(1).max(100),
   coordinate_point: GeoJsonPointSchema.optional(),
   elevation_m:      z.coerce.number().optional(),
+  callibrated_elevation: z.coerce.number().optional(),
   name:             z.string().max(200).optional(),
   assigned_sub_blocks: z.array(z.string().uuid()).default([]),
 });

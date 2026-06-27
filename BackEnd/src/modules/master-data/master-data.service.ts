@@ -858,6 +858,7 @@ function parseIrrigationPoint(ip: RawIrrigationPoint) {
     ...ip,
     coordinatePoint,
     elevationM: ip.elevationM != null ? parseFloat(ip.elevationM) : null,
+    callibratedElevation: ip.callibratedElevation != null ? parseFloat(ip.callibratedElevation) : null,
   };
 }
 
@@ -899,6 +900,25 @@ async function calculateAssignedSubBlocksForPoint(fieldId: string, coordinatePoi
   return Array.from(subBlockIds);
 }
 
+async function getFieldCalibrationOffset(fieldId: string): Promise<number> {
+  const [firstCalSubBlock] = await db.select({
+    elevationM: subBlocksTable.elevationM,
+    elevationCalibration: subBlocksTable.elevationCalibration,
+  })
+  .from(subBlocksTable)
+  .where(and(
+    eq(subBlocksTable.fieldId, fieldId),
+    sql`${subBlocksTable.elevationCalibration} IS NOT NULL`,
+    sql`${subBlocksTable.elevationM} IS NOT NULL`
+  ))
+  .limit(1);
+
+  if (firstCalSubBlock && firstCalSubBlock.elevationCalibration && firstCalSubBlock.elevationM) {
+    return parseFloat(firstCalSubBlock.elevationCalibration.toString()) - parseFloat(firstCalSubBlock.elevationM.toString());
+  }
+  return 0;
+}
+
 export const irrigationPointsService = {
   async listByField(fieldId: string) {
     const rows = await db.select().from(irrigationPointsTable)
@@ -926,11 +946,18 @@ export const irrigationPointsService = {
       assignedSubBlocks = await calculateAssignedSubBlocksForPoint(fieldId, input.coordinate_point);
     }
 
+    let callibratedElevation = input.callibrated_elevation?.toString() ?? null;
+    if (callibratedElevation === null && input.elevation_m !== undefined && input.elevation_m !== null) {
+      const offset = await getFieldCalibrationOffset(fieldId);
+      callibratedElevation = (input.elevation_m + offset).toFixed(2);
+    }
+
     const [ip] = await db.insert(irrigationPointsTable).values({
       fieldId,
       pointType:       input.point_type,
       coordinatePoint: input.coordinate_point ? JSON.stringify(input.coordinate_point) : null,
       elevationM:      input.elevation_m?.toString(),
+      callibratedElevation,
       name:            input.name,
       assignedSubBlocks: assignedSubBlocks,
     }).returning();
@@ -939,7 +966,12 @@ export const irrigationPointsService = {
   },
 
   async update(id: string, input: UpdateIrrigationPointInput) {
-    const [existing] = await db.select({ fieldId: irrigationPointsTable.fieldId, coordinatePoint: irrigationPointsTable.coordinatePoint })
+    const [existing] = await db.select({ 
+      fieldId: irrigationPointsTable.fieldId, 
+      coordinatePoint: irrigationPointsTable.coordinatePoint,
+      elevationM: irrigationPointsTable.elevationM,
+      callibratedElevation: irrigationPointsTable.callibratedElevation,
+    })
       .from(irrigationPointsTable).where(eq(irrigationPointsTable.id, id)).limit(1);
     if (!existing) throw new AppError(404, 'IRRIGATION_POINT_NOT_FOUND', 'Titik irigasi tidak ditemukan');
 
@@ -952,6 +984,23 @@ export const irrigationPointsService = {
       }
     }
 
+    let callibratedElevation: string | null | undefined = input.callibrated_elevation !== undefined 
+      ? input.callibrated_elevation?.toString() 
+      : undefined;
+
+    if (callibratedElevation === undefined) {
+      const targetElevationM = input.elevation_m !== undefined 
+        ? input.elevation_m 
+        : (existing.elevationM ? parseFloat(existing.elevationM) : null);
+
+      if (targetElevationM !== null) {
+        const offset = await getFieldCalibrationOffset(existing.fieldId);
+        callibratedElevation = (targetElevationM + offset).toFixed(2);
+      } else {
+        callibratedElevation = null;
+      }
+    }
+
     const [updated] = await db.update(irrigationPointsTable)
       .set({
         ...(input.point_type !== undefined && { pointType: input.point_type }),
@@ -959,6 +1008,7 @@ export const irrigationPointsService = {
           coordinatePoint: input.coordinate_point ? JSON.stringify(input.coordinate_point) : null 
         }),
         ...(input.elevation_m !== undefined && { elevationM: input.elevation_m?.toString() }),
+        ...(callibratedElevation !== undefined && { callibratedElevation }),
         ...(input.name !== undefined && { name: input.name }),
         ...(assignedSubBlocks !== undefined && { assignedSubBlocks }),
       })

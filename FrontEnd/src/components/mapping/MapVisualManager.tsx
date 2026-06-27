@@ -103,7 +103,7 @@ export function MapVisualManager({
   const srtInputRef = useRef<HTMLInputElement>(null);
 
   // Parse options state
-  const [frameIntervalSec, setFrameIntervalSec] = useState<number>(1);
+  const frameIntervalSec = 2;
   const [startSec, setStartSec] = useState<number>(0);
   const [endSec, setEndSec] = useState<number | null>(null);
   const [parsing, setParsing] = useState(false);
@@ -627,20 +627,7 @@ export function MapVisualManager({
             </div>
           )}
 
-          <div className="grid grid-cols-3 gap-3">
-            {/* Frame Interval in Seconds */}
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-muted-foreground">Interval Frame (detik)</label>
-              <input
-                type="number"
-                min={0.1}
-                step={0.1}
-                value={frameIntervalSec}
-                onChange={(e) => setFrameIntervalSec(parseFloat(e.target.value))}
-                className="border rounded-md bg-background px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-            </div>
-
+          <div className="grid grid-cols-2 gap-3">
             {/* Start Second */}
             <div className="flex flex-col gap-1">
               <div className="flex items-center justify-between">
