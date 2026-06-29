@@ -1,42 +1,95 @@
-# Laporan Pekerjaan Harian: Penyelesaian Integrasi DSS
-**Tanggal Pengerjaan:** 16-17 Juni 2026
+# 📊 Laporan Status Teknis Sistem — 29 Juni 2026
 
-Hari ini kita telah melakukan rombakan dan penyelesaian akhir yang masif pada arsitektur sistem pengambil keputusan (DSS) Smart AWD. Pekerjaan berfokus pada transisi dari *"Proof of Concept"* menjadi sistem tahan banting (*Production-Ready*) yang sanggup menghadapi kendala jaringan sensor dan cuaca ekstrem di lapangan.
-
-Berikut adalah rincian lengkap mengenai modifikasi, logika baru, dan pengujian yang berhasil diselesaikan hari ini:
+Laporan ini merangkum kondisi sistem secara menyeluruh berdasarkan analisis kode sumber terbaru (commit `c2498a09`).
 
 ---
 
-## 1. Kalibrasi Dinamis Sensor MQTT (Fleksibilitas Alat)
-Sebelumnya, modul pendengar telemetri MQTT (`mqtt.service.ts`) menggunakan angka perhitungan *hardcode* `1400` mm (140 cm) untuk mengubah jarak ultrasonik menjadi ketinggian genangan air. Ini diperbaiki agar sistem bisa mengakomodasi berbagai merk atau ketinggian tiang sensor yang berbeda.
-- **Perubahan DB:** Dibuat file migrasi `0005_sensor_max_distance.sql` yang menambahkan kolom `sensor_max_distance_mm` ke dalam tabel `mst.sensor_calibrations`. Skema *TypeScript* `mst.ts` juga diperbarui.
-- **Logika Sistem:** Pendengar MQTT sekarang memadukan data yang masuk dengan nilai kalibrasi di *database* pada saat pengolahan (menggunakan *fallback* `1400` mm hanya jika data belum dikonfigurasi oleh teknisi lapangan).
+## 1. Ringkasan Eksekutif
 
-## 2. Decoupling Modul State Builder (Stabilitas Beban)
-Untuk mencegah *race condition* atau server yang tersedak saat ratusan alat mengirimkan MQTT di detik yang sama, kita mencabut ketergantungan (decouple) algoritma kalkulator lapangan.
-- **Penghapusan Kaitan:** Menghapus fungsi pemicu asinkron `buildFieldStates()` dari dalam file `mqtt.service.ts`.
-- **Cron Job Baru:** Membuat *cron job* khusus di `state-builder.job.ts` dan mendaftarkannya ke `scheduler.service.ts`. Kini, penyusunan kompilasi keadaan lahan dan proses interpolasi K-Nearest Neighbors berjalan di balik layar (*background*) **secara rapi setiap 10 menit**.
-
-## 3. Fallback Node 4-Tingkat (Resiliensi Jaringan)
-Sistem GIS dan DSS tidak boleh pecah (*crash*) hanya karena ada 1 atau 2 tiang sensor yang dicabut petani atau kehabisan baterai. Kita menciptakan `node-resolver.ts` yang memberikan 4 sabuk pengaman sebelum mengeksekusi instruksi:
-- **Level 1 (Sensor Nyala):** Gunakan data observasi orisinal.
-- **Level 2 (Sensor Mati):** Gunakan hasil estimasi interpolasi.
-- **Level 3 (Estimator Gagal):** Gunakan hitungan Rata-Rata (*Field Average*) dari lahan tersebut.
-- **Level 4 (Lahan Mati Total):** Keluarkan nilai *Null*, dan sistem secara cerdas akan langsung membatalkan fungsi komputasi (*Routing Abort*) untuk menghindari pemberian saran ngawur.
-
-## 4. Orkestrasi Perutean Air / Water Routing (Algoritma Pintar)
-Menggabungkan DSS Engine (pencari petak kekeringan) dengan GIS Processing (algoritma *Floyd-Warshall* pencari rute air terdekat).
-- **Perubahan DB:** Dibuat file migrasi `0006_routing_enrichment.sql` untuk menyuntikkan kolom `route_path_ids` (array JSON) dan `routing_score` (angka desimal hambatan elevasi) pada tabel rekomendasi (*Drizzle Schema* `trx.ts`).
-- **Logika Routing:** Pembuatan `routing.service.ts` di Node.js yang bertugas merakit struktur Graf (Grafik Node Bersebelahan & Jarak Centroid PosGIS) untuk ditembakkan ke API Python.
-- **Hook Terintegrasi:** Penambahan asinkron *hook* `runWaterRouting` pada `engine-client.service.ts` agar setelah jadwal evaluasi DSS 30 menitan selesai, sistem langsung otomatis mencari "Jalur Tumpahan Air" dari target banjir ke target kekeringan.
-
-## 5. E2E Mass Fuzz Testing & Validasi Simulasi (Quality Assurance)
-Alih-alih berasumsi sistem ini berjalan baik, kita melakukan pengujian brutal melalui program simulasi:
-- **Node Resolver Test:** Skrip `test-dss-simulation.ts` pada Node.js telah memvalidasi bahwa perhitungan rata-rata lapangan saat sensor mati total berjalan dengan benar tanpa *error exception*.
-- **DSS Engine Fuzz Testing:** Skrip Python `fuzz_dss.py` menyuntikkan **150 skenario acak kombinasi ekstrem** (badai + kekeringan, hujan deras + sensor mati, dsb.) ke dalam otak utama *Decision Engine*.
-- **Hasil Mutlak:** Akurasi pengujian berada di rasio sempurna **100% (150 Lolos, 0 Error, 0 Logic Fail)**. DSS terbukti taat pada hierarki keamanan: BMKG dan Cuaca Buruk secara mutlak berhasil menganulir (override) kebutuhan irigasi mendesak demi mencegah banjir bawaan akibat salah pengambilan keputusan.
+**ProTel Smart AWD** telah mencapai fase **Production-Ready pada layer logika** (Backend + Python DSS Engine). Seluruh pipeline data dari sensor IoT hingga rekomendasi DSS telah terhubung dan divalidasi. FrontEnd sedang dalam tahap penyempurnaan integrasi visual DSS.
 
 ---
 
-> [!TIP]
-> Dengan selesainya *milestone* hari ini, Proyek Smart AWD ini telah secara resmi membuktikan keabsahan kecerdasannya secara teknis (tervalidasi anti-crash) dan sudah sangat pantas menuju fase presentasi, pengujian nyata, atau deployment *Production*.
+## 2. Apa yang Sudah Selesai
+
+### ✅ Backend Node.js (15 Modul)
+- Semua API endpoint CRUD master data (fields, sub-blocks, devices, embankments, crop cycles, rule profiles).
+- MQTT ingest pipeline dengan kalibrasi dinamis `(max_distance - raw) / 10`.
+- 5 cron jobs otomatis: state builder, stale flag, decision cycle, BMKG sync, HST updater.
+- 4-level node fallback resolver untuk water routing.
+- Floyd-Warshall routing orchestration.
+- RBAC: system_admin / field_manager / operator / viewer.
+- Assignments module untuk task management operator.
+- Agronomic treatments log.
+
+### ✅ Python DSS Engine
+- Matrix keputusan 5-dimensi (cuaca × kondisi lahan × waktu × flags × threshold).
+- 5 defense mechanisms: hysteresis, night block, pre-emptive drain, snooze, drought override.
+- Validasi input ketat via Pydantic v2 (tidak bisa crash dari input anomali).
+- 640 skenario fuzz test → 100% pass.
+
+### ✅ Database & Migrations
+- 26 file migrasi SQL terurut dan berhasil dieksekusi.
+- TimescaleDB hypertable untuk telemetri.
+- PostGIS triggers untuk auto-centroid.
+- PostgreSQL trigger untuk auto-generate MQTT device topic.
+- Tabel `mst.embankments` (pematang sawah) sudah ada.
+- Weather forecast snapshot dengan `is_latest` / `is_stale` flags.
+
+### ✅ BMKG Rain Event Detection
+- Algorithm windowing 12 jam (4 slot × 3 jam).
+- Rain Event grouping: slot basah berurutan → 1 RainEvent object.
+- Metadata ekstraksi: `hours_until_rain`, `duration_hours`, `peak_intensity_mm`.
+- Penyimpanan JSONB terstruktur di database.
+
+---
+
+## 3. Sedang Dalam Pengembangan
+
+### 🔧 FrontEnd React
+- Rendering `route_path_ids` sebagai animated polyline di OpenLayers.
+- Status "Offline" sensor di dashboard (walaupun interpolasi tetap berjalan).
+- Visual DSS rekomendasi yang lebih kaya informasi.
+
+---
+
+## 4. Known Issues & Bugs
+
+| Komponen | Issue | Severity |
+|---|---|---|
+| Firmware STM32 | Prescaler TIM1 = 47 (harus = 15), jarak meleset 3× | 🔴 HIGH |
+| Firmware STM32 | `Distance` var `uint8_t`, overflow > 255cm | 🟡 MEDIUM |
+| Firmware Node-1 | `.ioc` drift: makro `ECHO_Pin` undefined → build gagal | 🔴 HIGH |
+| Gateway ESP8266 | WiFi credentials hardcoded di source | 🟡 MEDIUM |
+| GIS Processing | Redis perlu aktif di production untuk ARQ Worker | 🟡 MEDIUM |
+| FrontEnd | `route_path_ids` belum di-render sebagai polyline | 🟠 MEDIUM |
+| Model/main.py | Health check masih bilang `titiler: mounted` meski TiTiler sudah dipisah | 🟢 LOW |
+
+---
+
+## 5. Tech Stack Snapshot
+
+| Layer | Teknologi | Versi |
+|---|---|---|
+| Frontend | React + Vite + TypeScript | 18.x / 5.x / 5.7 |
+| Frontend Map | OpenLayers | latest |
+| Frontend Charts | Recharts | latest |
+| Frontend Styling | Tailwind CSS | 3.x |
+| Backend | Node.js + Express | 20.x |
+| Backend ORM | Drizzle ORM | latest |
+| Backend Validation | Zod | latest |
+| Backend Logger | Pino | latest |
+| Database | PostgreSQL 16 + PostGIS + TimescaleDB | Supabase Cloud |
+| Python Service | FastAPI + Uvicorn + Pydantic v2 | Python 3.11 |
+| GIS Processing | FastAPI + NetworkX + SciPy + Redis | Python 3.11 |
+| Job Queue | ARQ (async Redis queue) | latest |
+| Storage | Cloudflare R2 (S3-compatible) | — |
+| Map Tiles | TiTiler (COG) | — |
+| Auth | JWT (Access + Refresh Token, HMAC SHA256) | — |
+| Firmware STM32 | HAL + GCC ARM | arm-none-eabi-gcc 10.x |
+| Firmware ESP8266 | Arduino (PlatformIO) | 6.x |
+| IoT Radio | nRF24L01+ | — |
+| IoT Sensor Jarak | HC-SR04 Ultrasonik | — |
+| IoT Sensor Cuaca | BMP280 (I2C) | — |
+| Drone Processing | WebODM (Docker) | — |
+| Weather API | BMKG Open Data (Adm4 Kelurahan) | — |

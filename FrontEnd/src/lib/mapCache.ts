@@ -3,7 +3,7 @@ import { apiClient, gisProcClient } from '@/api/client';
 /**
  * Fetch DTM georeferencing data and save to localStorage
  */
-async function fetchGeoreferenceDtm(fieldName: string) {
+async function fetchGeoreferenceDtm(fieldName: string, mapUrl?: string) {
   if (!fieldName) return;
   try {
     const geoDataStr = localStorage.getItem(fieldName);
@@ -23,12 +23,27 @@ async function fetchGeoreferenceDtm(fieldName: string) {
     }
 
     let projectId = '';
-    const userStr = localStorage.getItem('user');
-    if (userStr) {
+    
+    // Attempt to extract project_name from visual map URL
+    if (mapUrl) {
       try {
-        const user = JSON.parse(userStr);
-        projectId = user.id;
-      } catch (e) {}
+        const match = mapUrl.match(/[?&]project_name=([^&]+)/);
+        if (match) {
+          projectId = decodeURIComponent(match[1]);
+        }
+      } catch (e) {
+        console.warn('[MapCache] Failed to parse project_name from mapUrl', e);
+      }
+    }
+
+    if (!projectId) {
+      const userStr = localStorage.getItem('user');
+      if (userStr) {
+        try {
+          const user = JSON.parse(userStr);
+          projectId = user.id;
+        } catch (e) {}
+      }
     }
 
     if (!projectId) {
@@ -79,8 +94,8 @@ export async function getCachedMapImageUrl(url: string, fieldName?: string): Pro
   if (!url) return '';
   
   if (fieldName) {
-    // Run DTM georeferencing request in background
-    fetchGeoreferenceDtm(fieldName);
+    // Run DTM georeferencing request in background with map visual URL
+    fetchGeoreferenceDtm(fieldName, url);
   }
   
   try {
@@ -107,3 +122,39 @@ export async function getCachedMapImageUrl(url: string, fieldName?: string): Pro
     return url;
   }
 }
+
+/**
+ * Clear cached map image and localStorage georeference keys for a field
+ */
+export async function clearMapCache(url: string, fieldName: string): Promise<void> {
+  if (url) {
+    try {
+      const cache = await caches.open('map-images-cache');
+      await cache.delete(url);
+      console.log(`[MapCache] Cleared cached image: ${url}`);
+    } catch (error) {
+      console.error('[MapCache] Failed to clear image cache:', error);
+    }
+  }
+
+  if (fieldName) {
+    localStorage.removeItem(`${fieldName}_georeference`);
+    localStorage.removeItem(`map_headers_${fieldName}`);
+    localStorage.removeItem(fieldName);
+    
+    const targetHeaders = [
+      'x-bounds',
+      'x-crs',
+      'x-height',
+      'x-original-height',
+      'x-original-width',
+      'x-transform',
+      'x-width'
+    ];
+    targetHeaders.forEach(header => {
+      localStorage.removeItem(`${fieldName}_${header}`);
+    });
+    console.log(`[MapCache] Cleared localStorage cache keys for field: ${fieldName}`);
+  }
+}
+

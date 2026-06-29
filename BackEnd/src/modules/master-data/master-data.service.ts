@@ -16,6 +16,7 @@ import {
 } from '@/db/schema/mst';
 import { managementEvents as managementEventsTable } from '@/db/schema';
 import { telemetryRecords as telemetryRecordsTable } from '@/db/schema/trx';
+import { recalibrateFieldElevations } from '../telemetry/elevation-calibration';
 import { AppError } from '@/middleware/error.middleware';
 import { parsePagination, buildPaginationMeta } from '@/shared/utils/pagination.util';
 import type {
@@ -129,6 +130,7 @@ export const fieldsService = {
         notes:                  input.notes,
         mapVisualUrl:           `${GISPROC_API_BASE_URI}/webodm/display?project_name=${createdByUserId}&task_name=${input.name}&asset_type=orthophoto.tif`,
         assignedFileName:       input.assigned_file_name,
+        mapHeaders:             input.map_headers,
         irrigationEdges:        input.irrigation_edges,
         irrigationNodes:        input.irrigation_nodes,
       })
@@ -159,6 +161,7 @@ export const fieldsService = {
         ...(input.is_source_depleted    !== undefined && { isSourceDepleted: input.is_source_depleted }),
         ...(input.notes                 !== undefined && { notes: input.notes }),
         ...(input.assigned_file_name    !== undefined && { assignedFileName: input.assigned_file_name }),
+        ...(input.map_headers           !== undefined && { mapHeaders: input.map_headers }),
         ...(input.irrigation_edges      !== undefined && { irrigationEdges: input.irrigation_edges }),
         ...(input.irrigation_nodes      !== undefined && { irrigationNodes: input.irrigation_nodes }),
         updatedAt: new Date(),
@@ -646,28 +649,142 @@ export const devicesService = {
       .where(eq(devicesTable.id, deviceId));
 
     // Perform immediate auto-calibration if latest pressure record exists for this device
-    const [latestRecord] = await db.select()
+    const [device] = await db.select({
+      id:            devicesTable.id,
+      deviceCode:    devicesTable.deviceCode,
+      deviceType:    devicesTable.deviceType,
+      parentStation: devicesTable.parentStation,
+      fieldId:       devicesTable.fieldId,
+    })
+      .from(devicesTable)
+      .where(eq(devicesTable.id, deviceId))
+      .limit(1);
+
+    const [latestRecord] = await db.select({
+      pressure: telemetryRecordsTable.pressure,
+    })
       .from(telemetryRecordsTable)
+      .innerJoin(devicesTable, eq(devicesTable.id, telemetryRecordsTable.deviceId))
       .where(and(
-        eq(telemetryRecordsTable.deviceId, deviceId),
+        eq(devicesTable.fieldId, fieldId),
         sql`${telemetryRecordsTable.pressure} IS NOT NULL`
       ))
       .orderBy(desc(telemetryRecordsTable.eventTimestamp))
       .limit(1);
 
-    if (latestRecord && latestRecord.pressure) {
+    if (latestRecord && latestRecord.pressure && device) {
       const pressureVal = parseFloat(latestRecord.pressure.toString());
-      const elevationVal = 44330 * (1 - Math.pow(pressureVal / 1013.25, 0.1903));
-      await db.update(subBlocksTable)
-        .set({
-          elevationCalibration: elevationVal.toFixed(2),
-          updatedAt: new Date(),
+      const stationCode = (device.deviceType === 'station' || device.deviceType === 'weather_station')
+        ? device.deviceCode
+        : device.parentStation;
+
+      let stationPoint = null;
+      if (stationCode) {
+        [stationPoint] = await db.select({
+          coordinatePoint: irrigationPointsTable.coordinatePoint,
+          elevationM: irrigationPointsTable.elevationM,
         })
-        .where(eq(subBlocksTable.id, input.sub_block_id));
+          .from(irrigationPointsTable)
+          .where(and(
+            eq(irrigationPointsTable.fieldId, device.fieldId),
+            eq(irrigationPointsTable.name, stationCode)
+          ))
+          .limit(1);
+      }
+
+      if (!stationPoint) {
+        [stationPoint] = await db.select({
+          coordinatePoint: irrigationPointsTable.coordinatePoint,
+          elevationM: irrigationPointsTable.elevationM,
+        })
+          .from(irrigationPointsTable)
+          .where(and(
+            eq(irrigationPointsTable.fieldId, device.fieldId),
+            sql`${irrigationPointsTable.pointType} IN ('station', 'weather_station')`
+          ))
+          .limit(1);
+      }
+
+      let refSubBlock = null;
+
+      // 1. Get the station device and its assigned sub-block ID
+      let stationDevice = null;
+      if (stationCode) {
+        [stationDevice] = await db.select({
+          subBlockId: devicesTable.subBlockId,
+        })
+          .from(devicesTable)
+          .where(and(
+            eq(devicesTable.fieldId, device.fieldId),
+            eq(devicesTable.deviceCode, stationCode),
+            sql`${devicesTable.deviceType} IN ('station', 'weather_station')`
+          ))
+          .limit(1);
+      }
+
+      if (!stationDevice) {
+        [stationDevice] = await db.select({
+          subBlockId: devicesTable.subBlockId,
+        })
+          .from(devicesTable)
+          .where(and(
+            eq(devicesTable.fieldId, device.fieldId),
+            sql`${devicesTable.deviceType} IN ('station', 'weather_station')`
+          ))
+          .limit(1);
+      }
+
+      // 2. If station has an assigned sub-block, use it as reference
+      if (stationDevice && stationDevice.subBlockId) {
+        [refSubBlock] = await db.select({
+          id: subBlocksTable.id,
+          elevationM: subBlocksTable.elevationM,
+        })
+          .from(subBlocksTable)
+          .where(eq(subBlocksTable.id, stationDevice.subBlockId))
+          .limit(1);
+      }
+
+      // 3. Fallback: if no assigned sub-block, find the nearest one to the station point
+      if (!refSubBlock && stationPoint && stationPoint.coordinatePoint) {
+        [refSubBlock] = await db.select({
+          id: subBlocksTable.id,
+          elevationM: subBlocksTable.elevationM,
+        })
+          .from(subBlocksTable)
+          .where(eq(subBlocksTable.fieldId, device.fieldId))
+          .orderBy(sql`ST_Distance(${subBlocksTable.centroid}, ${stationPoint.coordinatePoint})`)
+          .limit(1);
+      }
+
+      // 4. Fallback: if still no sub-block, use any sub-block on this field
+      if (!refSubBlock) {
+        [refSubBlock] = await db.select({
+          id: subBlocksTable.id,
+          elevationM: subBlocksTable.elevationM,
+        })
+          .from(subBlocksTable)
+          .where(eq(subBlocksTable.fieldId, device.fieldId))
+          .limit(1);
+      }
+
+      let refElevationM = 0;
+      if (refSubBlock && refSubBlock.elevationM !== null) {
+        refElevationM = parseFloat(refSubBlock.elevationM.toString());
+      } else if (stationPoint && stationPoint.elevationM !== null) {
+        refElevationM = parseFloat(stationPoint.elevationM.toString());
+      }
+
+      await recalibrateFieldElevations(device.fieldId, input.sub_block_id, pressureVal);
     }
   },
 
   async unassign(deviceId: string, unassignedBy: string) {
+    const [device] = await db.select({ fieldId: devicesTable.fieldId })
+      .from(devicesTable)
+      .where(eq(devicesTable.id, deviceId))
+      .limit(1);
+
     await db.update(deviceAssignmentsTable)
       .set({ unassignedAt: new Date(), unassignedBy })
       .where(and(
@@ -678,6 +795,10 @@ export const devicesService = {
     await db.update(devicesTable)
       .set({ subBlockId: null, updatedAt: new Date() })
       .where(eq(devicesTable.id, deviceId));
+
+    if (device) {
+      await recalibrateFieldElevations(device.fieldId);
+    }
   },
 
   async calibrate(deviceId: string, input: CalibrateDeviceInput, calibratedBy: string) {
@@ -791,6 +912,7 @@ function parseIrrigationPoint(ip: RawIrrigationPoint) {
     ...ip,
     coordinatePoint,
     elevationM: ip.elevationM != null ? parseFloat(ip.elevationM) : null,
+    callibratedElevation: ip.callibratedElevation != null ? parseFloat(ip.callibratedElevation) : null,
   };
 }
 
@@ -808,7 +930,7 @@ async function calculateAssignedSubBlocksForPoint(fieldId: string, coordinatePoi
   .where(and(
     eq(embankmentsTable.fieldId, fieldId),
     eq(embankmentsTable.isActive, true),
-    sql`ST_Intersects(${embankmentsTable.polygonGeom}::geometry, ST_GeomFromGeoJSON(${geomJson}))`
+    sql`ST_Intersects(ST_SetSRID(${embankmentsTable.polygonGeom}::geometry, 4326), ST_GeomFromGeoJSON(${geomJson}))`
   ));
 
   for (const emb of intersectingEmbankments) {
@@ -824,12 +946,31 @@ async function calculateAssignedSubBlocksForPoint(fieldId: string, coordinatePoi
   .where(and(
     eq(subBlocksTable.fieldId, fieldId),
     eq(subBlocksTable.isActive, true),
-    sql`ST_Intersects(${subBlocksTable.polygonGeom}::geometry, ST_GeomFromGeoJSON(${geomJson}))`
+    sql`ST_Intersects(ST_SetSRID(${subBlocksTable.polygonGeom}::geometry, 4326), ST_GeomFromGeoJSON(${geomJson}))`
   ));
 
   intersectingSubBlocks.forEach(row => subBlockIds.add(row.id));
 
   return Array.from(subBlockIds);
+}
+
+async function getFieldCalibrationOffset(fieldId: string): Promise<number> {
+  const [firstCalSubBlock] = await db.select({
+    elevationM: subBlocksTable.elevationM,
+    elevationCalibration: subBlocksTable.elevationCalibration,
+  })
+  .from(subBlocksTable)
+  .where(and(
+    eq(subBlocksTable.fieldId, fieldId),
+    sql`${subBlocksTable.elevationCalibration} IS NOT NULL`,
+    sql`${subBlocksTable.elevationM} IS NOT NULL`
+  ))
+  .limit(1);
+
+  if (firstCalSubBlock && firstCalSubBlock.elevationCalibration && firstCalSubBlock.elevationM) {
+    return parseFloat(firstCalSubBlock.elevationCalibration.toString()) - parseFloat(firstCalSubBlock.elevationM.toString());
+  }
+  return 0;
 }
 
 export const irrigationPointsService = {
@@ -859,11 +1000,18 @@ export const irrigationPointsService = {
       assignedSubBlocks = await calculateAssignedSubBlocksForPoint(fieldId, input.coordinate_point);
     }
 
+    let callibratedElevation = input.callibrated_elevation?.toString() ?? null;
+    if (callibratedElevation === null && input.elevation_m !== undefined && input.elevation_m !== null) {
+      const offset = await getFieldCalibrationOffset(fieldId);
+      callibratedElevation = (input.elevation_m + offset).toFixed(2);
+    }
+
     const [ip] = await db.insert(irrigationPointsTable).values({
       fieldId,
       pointType:       input.point_type,
       coordinatePoint: input.coordinate_point ? JSON.stringify(input.coordinate_point) : null,
       elevationM:      input.elevation_m?.toString(),
+      callibratedElevation,
       name:            input.name,
       assignedSubBlocks: assignedSubBlocks,
     }).returning();
@@ -872,7 +1020,12 @@ export const irrigationPointsService = {
   },
 
   async update(id: string, input: UpdateIrrigationPointInput) {
-    const [existing] = await db.select({ fieldId: irrigationPointsTable.fieldId, coordinatePoint: irrigationPointsTable.coordinatePoint })
+    const [existing] = await db.select({ 
+      fieldId: irrigationPointsTable.fieldId, 
+      coordinatePoint: irrigationPointsTable.coordinatePoint,
+      elevationM: irrigationPointsTable.elevationM,
+      callibratedElevation: irrigationPointsTable.callibratedElevation,
+    })
       .from(irrigationPointsTable).where(eq(irrigationPointsTable.id, id)).limit(1);
     if (!existing) throw new AppError(404, 'IRRIGATION_POINT_NOT_FOUND', 'Titik irigasi tidak ditemukan');
 
@@ -885,6 +1038,23 @@ export const irrigationPointsService = {
       }
     }
 
+    let callibratedElevation: string | null | undefined = input.callibrated_elevation !== undefined 
+      ? input.callibrated_elevation?.toString() 
+      : undefined;
+
+    if (callibratedElevation === undefined) {
+      const targetElevationM = input.elevation_m !== undefined 
+        ? input.elevation_m 
+        : (existing.elevationM ? parseFloat(existing.elevationM) : null);
+
+      if (targetElevationM !== null) {
+        const offset = await getFieldCalibrationOffset(existing.fieldId);
+        callibratedElevation = (targetElevationM + offset).toFixed(2);
+      } else {
+        callibratedElevation = null;
+      }
+    }
+
     const [updated] = await db.update(irrigationPointsTable)
       .set({
         ...(input.point_type !== undefined && { pointType: input.point_type }),
@@ -892,6 +1062,7 @@ export const irrigationPointsService = {
           coordinatePoint: input.coordinate_point ? JSON.stringify(input.coordinate_point) : null 
         }),
         ...(input.elevation_m !== undefined && { elevationM: input.elevation_m?.toString() }),
+        ...(callibratedElevation !== undefined && { callibratedElevation }),
         ...(input.name !== undefined && { name: input.name }),
         ...(assignedSubBlocks !== undefined && { assignedSubBlocks }),
       })
@@ -998,13 +1169,12 @@ export const cropCyclesService = {
 
 type RawRuleProfile = typeof ruleProfilesTable.$inferSelect;
 
-/** Coerce numeric string columns returned by PostgreSQL into JS numbers. */
 function parseRuleProfileNumerics(profile: RawRuleProfile) {
+  const awdUpperTarget = parseFloat(profile.awdUpperTargetCm);
   return {
     ...profile,
-    awdLowerThresholdCm: parseFloat(profile.awdLowerThresholdCm),
-    awdUpperTargetCm:    parseFloat(profile.awdUpperTargetCm),
-    droughtAlertCm:      profile.droughtAlertCm != null ? parseFloat(profile.droughtAlertCm) : null,
+    awdUpperTargetCm:    awdUpperTarget,
+    droughtAlertCm:      profile.droughtAlertCm != null ? parseFloat(profile.droughtAlertCm) : (awdUpperTarget - 10),
     rainDelayMm:         parseFloat(profile.rainDelayMm),
     priorityWeight:      parseFloat(profile.priorityWeight),
   };
@@ -1029,7 +1199,6 @@ export const ruleProfilesService = {
       description:            input.description,
       bucketCode:             input.bucket_code,
       phaseCode:              input.phase_code,
-      awdLowerThresholdCm:    input.awd_lower_threshold_cm.toString(),
       awdUpperTargetCm:       input.awd_upper_target_cm.toString(),
       droughtAlertCm:         input.drought_alert_cm?.toString(),
       minSaturationDays:      input.min_saturation_days,
@@ -1056,7 +1225,6 @@ export const ruleProfilesService = {
         ...(input.description !== undefined && { description: input.description }),
         ...(input.bucket_code !== undefined && { bucketCode: input.bucket_code }),
         ...(input.phase_code !== undefined && { phaseCode: input.phase_code }),
-        ...(input.awd_lower_threshold_cm !== undefined && { awdLowerThresholdCm: input.awd_lower_threshold_cm.toString() }),
         ...(input.awd_upper_target_cm !== undefined && { awdUpperTargetCm: input.awd_upper_target_cm.toString() }),
         ...(input.drought_alert_cm !== undefined && { droughtAlertCm: input.drought_alert_cm?.toString() }),
         ...(input.min_saturation_days !== undefined && { minSaturationDays: input.min_saturation_days }),

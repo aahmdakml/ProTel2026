@@ -1,7 +1,8 @@
 # 🏗️ TIER 1: Arsitektur Utama Sistem (C4 Model)
+> **Update:** 29 Juni 2026 — Disesuaikan dengan kode sumber aktual (15 modul BE, embankments, assignments, dll.)
 
 ## 1. Ikhtisar Arsitektur
-Proyek Smart AWD dipecah menjadi beberapa *Microservices* yang memiliki tugas spesifik untuk menghindari titik tunggal kegagalan (*Single Point of Failure*). Diagram di bawah ini merepresentasikan Model Arsitektur C4 tingkat *Container/Component* yang menunjukkan aliran komunikasi antar-modul di *Cloud/On-Premise*.
+Proyek Smart AWD dipecah menjadi beberapa *Microservices* yang memiliki tugas spesifik untuk menghindari titik tunggal kegagalan (*Single Point of Failure*). Diagram di bawah ini merepresentasikan Model Arsitektur C4 tingkat *Container/Component*.
 
 ## 2. Diagram C4 Komponen & Aliran Data
 ```mermaid
@@ -9,67 +10,87 @@ graph TD
     %% Entitas Eksternal
     Operator(["👤 Operator / Petani"])
     Drone(["🚁 DJI Drone"])
-    SensorIoT(["📡 Sensor IoT (ESP32)"])
-    BMKG(["⛈️ API Cuaca BMKG"])
+    SensorIoT(["📡 Sensor IoT RiceMesh (ESP8266)"])
+    BMKG(["⛈️ API Cuaca BMKG (Adm4)"])
 
     %% Sistem Utama
     subgraph KLASTER ["KLASTER SISTEM SMART AWD"]
         
-        %% Ingestion & Cloud Level (Atas)
+        %% Layer Cloud & IoT
         MQTT["✉️ MQTT Broker (Mosquitto)"]
         WebODM["🏗️ WebODM (Docker Cluster)"]
         Cloudflare[("☁️ Cloudflare R2 (Object Storage)")]
         
-        %% Web & App Level (Tengah Atas)
-        FE["🖥️ FrontEnd Web (React/OpenLayers)"]
-        BE["⚙️ BackEnd Server (Node.js/Express)"]
+        %% Layer Web App
+        FE["🖥️ FrontEnd Web (React 18 + OpenLayers)"]
+        BE["⚙️ BackEnd API (Node.js 20 + Express + Drizzle ORM)"]
         
-        %% Python Services Level (Tengah Bawah)
-        subgraph Python_Cluster ["🧠 Python Microservices"]
-            Titiler["🗺️ Titiler COG Server"]
-            DSS["🤖 Decision Engine (FastAPI)"]
-            GIS["📐 GIS Processing (FastAPI)"]
-            ARQ["⏱️ ARQ Redis Worker"]
+        %% Layer Python Microservices
+        subgraph Python_Cluster ["🧠 Python Microservices (FastAPI)"]
+            Titiler["🗺️ TiTiler COG Map Server"]
+            DSS["🤖 AWD Decision Engine"]
+            GIS["📐 GIS Processing + Floyd-Warshall"]
+            ARQ["⏱️ ARQ Redis Background Worker"]
         end
         
-        %% Storage Level (Paling Bawah)
-        subgraph Database_Cluster ["🗄️ Database Polyglot"]
-            Postgres[("Relational & PostGIS")]
-            Timescale[("TimescaleDB (Hypertable)")]
-            Redis[("Redis Memory Cache")]
+        %% Layer Database
+        subgraph Database_Cluster ["🗄️ Database Polyglot (Supabase Cloud)"]
+            Postgres[("PostgreSQL 16 + PostGIS\n(Schema: mst / trx / sys / logs)")]
+            Timescale[("TimescaleDB Hypertable\n(trx.telemetry_records)")]
+            Redis[("Redis\n(ARQ Job Queue)")]
         end
     end
 
-    %% Hubungan dan Aliran (Top to Bottom)
-    Operator -->|"Interaksi UI"| FE
-    Drone -->|"Upload Foto JPG"| WebODM
-    SensorIoT -->|"Publish JSON"| MQTT
+    %% ── Aliran Interaksi ──
+    Operator -->|"Buka Dashboard"| FE
+    FE <-->|"REST API (JSON) Port 3000"| BE
     
-    %% Alur Peta & Visual (Kiri / Terpisah)
-    WebODM -.->|"Konversi TIF to COG"| Cloudflare
-    Cloudflare -.->|"Byte Range Read"| Titiler
-    Titiler -->|"Serve XYZ Map Tiles"| FE
+    Drone -->|"Upload 300+ Foto JPG"| WebODM
+    WebODM -.->|"Ekspor COG .tif → Upload"| Cloudflare
+    Cloudflare -.->|"S3 Byte-Range Read"| Titiler
+    Titiler -->|"Serve XYZ Tiles (EPSG:3857)"| FE
     
-    %% Alur Data Sensor (Tengah)
-    MQTT -->|"Subscribe Ingest"| BE
-    BMKG -->|"Fetch Weather"| BE
-    FE <-->|"Serve API Auth & Field Data"| BE
+    SensorIoT -->|"Publish JSON per-device topic\n(tiap 5-10 menit)"| MQTT
+    MQTT -->|"Subscribe → Ingest & Kalibrasi"| BE
     
-    %% Alur Pemrosesan Lanjut (DSS & GIS)
-    BE <-->|"Evaluate Req/Res"| DSS
-    BE -->|"Post Centroid Graph"| GIS
+    BMKG -->|"Fetch prakiraan cuaca\n(per adm4_code, setiap 3 jam)"| BE
     
-    %% Alur Pekerja (Worker Queue)
-    GIS -->|"Enqueue Task"| Redis
-    Redis -->|"Dequeue & Compute"| ARQ
-    ARQ -->|"Result"| Redis
+    BE <-->|"POST /evaluate\n(setiap 30 menit, payload JSON besar)"| DSS
+    BE -->|"POST centroid graph + ketinggian"| GIS
     
-    %% Alur Penyimpanan Basis Data (Bawah)
-    BE -->|"Read/Write Master & Spatial"| Postgres
-    BE -->|"Batch Insert Sensor Data"| Timescale
+    GIS -->|"Enqueue Floyd-Warshall job"| Redis
+    Redis -->|"Dequeue & Process O(V³)"| ARQ
+    ARQ -->|"Matrix hasil rute air"| Redis
+    Redis -.->|"BE polling hasil"| BE
+    
+    BE -->|"Baca/Tulis data master & spasial"| Postgres
+    BE -->|"Batch insert telemetri (no compute)"| Timescale
 ```
 
-## 3. Penjelasan Interaksi
-- **Pemisahan Penayangan Peta:** Backend Node.js sama sekali tidak memproses aset gambar peta. *FrontEnd* menarik lapisan poligon dan data rekomendasi dari Backend, tetapi menarik ubin peta (*Tiles*) secara terpisah dari `Titiler` yang terhubung langsung ke `Cloudflare R2`.
-- **Komunikasi Internal (Internal Network):** Komunikasi antara Node.js dengan Python (DSS Engine dan GIS) dilakukan secara REST API privat tanpa ter-ekspos ke internet luar.
-- **Isolasi Tugas Berat:** Semua beban perhitungan berat (*All-Pairs Shortest Path*) dilepaskan ke luar FastAPI melalui antrean *Redis* dan diproses oleh *Worker Daemon*.
+## 3. Daftar Lengkap Modul BackEnd (15 Modul Aktif)
+
+| # | Modul | Route Prefix | Fungsi |
+|---|---|---|---|
+| 1 | `health` | `GET /health` | Health check server |
+| 2 | `auth` | `/auth/*` | JWT: login, refresh token, logout |
+| 3 | `master-data` | `/fields, /sub-blocks, /devices, /embankments, ...` | CRUD semua entity master |
+| 4 | `telemetry/ingest` | `POST /ingest/batch` | Terima batch data sensor dari MQTT gateway |
+| 5 | `telemetry/query` | `GET /telemetry/sub-blocks/:id/history` | Query historis sensor time-series |
+| 6 | `recommendations` | `/fields/:id/recommendations, /alerts` | Output DSS & peringatan aktif |
+| 7 | `assignments` | `/assignments/pending, /completed` | Task management lapangan untuk operator |
+| 8 | `agronomic-treatments` | `POST /fields/:id/agronomic-treatments` | Log intervensi agronomi manual |
+| 9 | `dashboard` | `/dashboard` | Statistik & ringkasan keseluruhan lahan |
+| 10 | `map-visual` | `/fields/:id/map-visual` | Data layer GeoJSON untuk peta FE |
+| 11 | `orthomosaic` | `/fields/:id/orthomosaic, /map-layers` | Upload & manajemen layer citra drone |
+| 12 | `archive` | `/crop-cycles/:id/complete` | Arsipkan siklus tanam yang selesai |
+| 13 | `system-settings` | `/system-settings` | Konfigurasi global (admin only) |
+| 14 | `scheduler` | *(internal daemon)* | Cron jobs otomasi (node-cron) |
+| 15 | `weather` | *(internal service)* | Sinkronisasi data BMKG |
+
+## 4. Penjelasan Interaksi Kritis
+- **Pemisahan Penayangan Peta:** Backend Node.js sama sekali tidak memproses aset gambar peta. FrontEnd menarik lapisan poligon dan data rekomendasi dari Backend, tetapi menarik ubin peta (Tiles) secara terpisah langsung dari `TiTiler → Cloudflare R2`.
+- **Komunikasi Internal:** Komunikasi antara Node.js dengan Python DSS dan GIS dilakukan via REST API privat di jaringan internal — tidak ter-ekspos ke internet.
+- **Isolasi Tugas Berat:** Kalkulasi Floyd-Warshall O(V³) dilepaskan ke `ARQ Worker` melalui antrean Redis agar API tidak timeout.
+- **Serverless Database:** Database berjalan di Supabase Cloud. Tidak perlu Docker database lokal. Migrasi dikelola via Drizzle ORM.
+- **Per-Device MQTT Topic:** Setiap device memiliki MQTT topic unik yang di-generate otomatis via PostgreSQL trigger dengan format `field/{field_id}/sensor/{device_code}`.
+- **Kalibrasi Dinamis IoT:** Rumus kalibrasi: `water_level_cm = (sensor_max_distance_mm - raw_distance_mm) / 10`. `sensor_max_distance_mm` disimpan di `mst.sensor_calibrations` per device.

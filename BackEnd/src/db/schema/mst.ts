@@ -72,6 +72,7 @@ export const fields = mst.table('fields', {
   notes:                text('notes'),
   mapVisualUrl:         text('map_visual_url'),
   mapBounds:            jsonb('map_bounds'),
+  mapHeaders:           jsonb('map_headers'),
   assignedFileName:     text('assigned_file_name'),
   irrigationEdges:      json('irrigation_edges'),
   irrigationNodes:      json('irrigation_nodes'),
@@ -164,6 +165,7 @@ export const irrigationPoints = mst.table('irrigation_points', {
   pointType:        text('point_type').notNull(),
   coordinatePoint:  geometryPoint('coordinate_point'),
   elevationM:       numeric('elevation_m', { precision: 7, scale: 2 }),
+  callibratedElevation: numeric('callibrated_elevation', { precision: 7, scale: 2 }),
   name:             text('name'),
   assignedSubBlocks: jsonb('assigned_sub_blocks').$type<string[]>().notNull().default([]),
 });
@@ -258,7 +260,6 @@ export const irrigationRuleProfiles = mst.table('irrigation_rule_profiles', {
   description:          text('description'),
   bucketCode:           text('bucket_code').notNull().references(() => riceDurationBuckets.bucketCode),
   phaseCode:            text('phase_code').notNull().references(() => growthPhases.phaseCode),
-  awdLowerThresholdCm:  numeric('awd_lower_threshold_cm', { precision: 6, scale: 2 }).notNull(),
   awdUpperTargetCm:     numeric('awd_upper_target_cm', { precision: 6, scale: 2 }).notNull(),
   droughtAlertCm:       numeric('drought_alert_cm', { precision: 6, scale: 2 }),
   minSaturationDays:    integer('min_saturation_days').notNull().default(1),

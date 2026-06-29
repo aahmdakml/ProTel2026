@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { Upload, Map as MapIcon, Check, Loader2, Video, ChevronDown, RefreshCw, Clapperboard, Globe, AlertTriangle, FileText } from 'lucide-react';
+import { Upload, Map as MapIcon, Check, Loader2, Video, ChevronDown, RefreshCw, Clapperboard, AlertTriangle, FileText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { apiClient } from '@/api/client';
 import { videoOpsApi, VideoEntry, ParsedVideoEntry, JobLogEntry } from '@/api/gisProc';
 import axios from 'axios';
-import { getCachedMapImageUrl } from '@/lib/mapCache';
+import { getCachedMapImageUrl, clearMapCache } from '@/lib/mapCache';
+import { useDialog } from '@/components/ui/dialog-provider';
 
 interface WebodmSseProgress {
   status: string;
@@ -16,6 +17,58 @@ const DEFAULT_WEBODM_PROGRESS: WebodmSseProgress = {
   status: '',
   stage: '',
   webodmPercent: null,
+};
+
+const parseVideoPercent = (status: string): number | null => {
+  if (!status) return null;
+
+  try {
+    const parsed = JSON.parse(status);
+    if (typeof parsed.percent === 'number') return parsed.percent;
+    if (typeof parsed.percentage === 'number') return parsed.percentage;
+    if (typeof parsed.progress === 'number') {
+      return parsed.progress <= 1 ? parsed.progress * 100 : parsed.progress;
+    }
+    if (typeof parsed.status === 'string') {
+      status = parsed.status;
+    } else if (typeof parsed.message === 'string') {
+      status = parsed.message;
+    }
+  } catch {
+    // ignore JSON parse error
+  }
+
+  const percentMatch = status.match(/(\d+(?:\.\d+)?)\s*%/);
+  if (percentMatch) {
+    const val = parseFloat(percentMatch[1]);
+    if (!isNaN(val) && val >= 0 && val <= 100) {
+      return val;
+    }
+  }
+
+  // fallback to parsing text like "Frame: 120/1500"
+  const fractionMatch = status.match(/Frame:\s*(\d+)\s*\/\s*(\d+)/i);
+  if (fractionMatch) {
+    const current = parseInt(fractionMatch[1], 10);
+    const total = parseInt(fractionMatch[2], 10);
+    if (total > 0 && current <= total) {
+      return (current / total) * 100;
+    }
+  }
+
+  return null;
+};
+
+const cleanSseStatus = (status: string): string => {
+  if (!status) return '';
+  try {
+    const parsed = JSON.parse(status);
+    if (typeof parsed.status === 'string') return parsed.status;
+    if (typeof parsed.message === 'string') return parsed.message;
+  } catch {
+    // ignore JSON parse error
+  }
+  return status;
 };
 
 interface MapVisualManagerProps {
@@ -35,9 +88,18 @@ export function MapVisualManager({
   initialAssignedFileName,
   onSuccess 
 }: MapVisualManagerProps) {
+  const dialog = useDialog();
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
+
+  // States for direct image uploads
+  const [uploadMode, setUploadMode] = useState<'video' | 'images'>('video');
+  const [imageFiles, setImageFiles] = useState<File[]>([]);
+  const [imageCollectionName, setImageCollectionName] = useState<string>('');
+  const [imagesUploading, setImagesUploading] = useState(false);
+  const [imagesUploadError, setImagesUploadError] = useState<string | null>(null);
+  const imagesInputRef = useRef<HTMLInputElement>(null);
 
   // Video source selector state
   const [videos, setVideos] = useState<VideoEntry[]>([]);
@@ -52,7 +114,7 @@ export function MapVisualManager({
   const srtInputRef = useRef<HTMLInputElement>(null);
 
   // Parse options state
-  const [frameIntervalSec, setFrameIntervalSec] = useState<number>(1);
+  const frameIntervalSec = 2;
   const [startSec, setStartSec] = useState<number>(0);
   const [endSec, setEndSec] = useState<number | null>(null);
   const [parsing, setParsing] = useState(false);
@@ -83,6 +145,8 @@ export function MapVisualManager({
   const [mapNotFound, setMapNotFound] = useState(false);
   const [checkingMap, setCheckingMap] = useState(false);
   const [cachedUrl, setCachedUrl] = useState<string>('');
+  const [refreshKey, setRefreshKey] = useState<number>(0);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     if (initialVisualUrl) {
@@ -92,7 +156,7 @@ export function MapVisualManager({
     } else {
       setCachedUrl('');
     }
-  }, [initialVisualUrl]);
+  }, [initialVisualUrl, refreshKey]);
 
   useEffect(() => {
     if (!initialVisualUrl) {
@@ -128,7 +192,10 @@ export function MapVisualManager({
         'x-original-height',
         'x-original-width',
         'x-transform',
-        'x-width'
+        'x-width',
+        'max-resolution',
+        'max_resolution',
+        'x-max-resolution'
       ];
       
       const savedData: Record<string, string> = { fieldName };
@@ -146,6 +213,10 @@ export function MapVisualManager({
         console.log("[MapVisualManager] Saving map headers to localStorage for field:", fieldName, savedData);
         localStorage.setItem(`map_headers_${fieldName}`, JSON.stringify(savedData));
         localStorage.setItem(fieldName, JSON.stringify(savedData));
+        
+        apiClient.patch(`/fields/${fieldId}`, { map_headers: savedData })
+          .then(() => console.log("[MapVisualManager] Map headers successfully saved to database"))
+          .catch(err => console.error("[MapVisualManager] Failed to save map headers to database", err));
       } else {
         console.warn("[MapVisualManager] No target headers found in response headers. Not saving to localStorage.");
       }
@@ -172,7 +243,20 @@ export function MapVisualManager({
     };
 
     checkMapUrl();
-  }, [initialVisualUrl, fieldName]);
+  }, [initialVisualUrl, fieldName, refreshKey]);
+
+  const handleRefreshCache = async () => {
+    if (!initialVisualUrl) return;
+    try {
+      setRefreshing(true);
+      await clearMapCache(initialVisualUrl, fieldName);
+      setRefreshKey(prev => prev + 1);
+    } catch (err) {
+      console.error('Failed to refresh map cache', err);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   // Default select video based on initialAssignedFileName
   const [hasDefaultSelected, setHasDefaultSelected] = useState(false);
@@ -441,11 +525,75 @@ export function MapVisualManager({
     }
   };
 
+  const handleDirectImagesUploadAndBuildMap = async () => {
+    if (!imageCollectionName || imageFiles.length === 0) return;
+    setImagesUploadError(null);
+    setImagesUploading(true);
+
+    try {
+      // 1. Get ownerId
+      const meRes = await apiClient.get('/auth/me');
+      const ownerId: string = meRes.data.data.id;
+
+      // 2. Upload images
+      await videoOpsApi.uploadParsedImages(ownerId, imageCollectionName, imageFiles);
+
+      // 3. Assign assigned_file_name in field record
+      await apiClient.patch(`/fields/${fieldId}`, {
+        assigned_file_name: imageCollectionName
+      });
+
+      // 4. Trigger WebODM task
+      const res = await videoOpsApi.uploadToWebODM({
+        owner_id: ownerId,
+        filename: imageCollectionName,
+        project_name: ownerId,
+        task_name: fieldName,
+      });
+
+      const jobId: string = res.data.job_id;
+      subscribeToWebodmJob(jobId);
+    } catch (err: any) {
+      console.error(err);
+      setImagesUploadError(err.response?.data?.message || err.message || 'Gagal mengunggah foto dan membuat peta');
+    } finally {
+      setImagesUploading(false);
+    }
+  };
+
   return (
     <div className="space-y-4 p-4 border rounded-xl bg-muted/10">
 
-      {/* Video Source Selector */}
-      <div className="space-y-2">
+      {/* Input Mode Selector */}
+      <div className="flex border-b border-border pb-1 mb-2">
+        <button
+          type="button"
+          className={`flex-1 pb-1.5 text-xs font-semibold border-b-2 text-center transition-colors ${
+            uploadMode === 'video'
+              ? 'border-primary text-primary'
+              : 'border-transparent text-muted-foreground hover:text-foreground'
+          }`}
+          onClick={() => setUploadMode('video')}
+        >
+          Dari File Video
+        </button>
+        <button
+          type="button"
+          className={`flex-1 pb-1.5 text-xs font-semibold border-b-2 text-center transition-colors ${
+            uploadMode === 'images'
+              ? 'border-primary text-primary'
+              : 'border-transparent text-muted-foreground hover:text-foreground'
+          }`}
+          onClick={() => setUploadMode('images')}
+        >
+          Dari File Foto
+        </button>
+      </div>
+
+      {uploadMode === 'video' ? (
+        <div className="space-y-4">
+          {/* Video Source Selector */}
+          <div className="space-y-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Video className="h-4 w-4 text-primary" />
@@ -576,20 +724,7 @@ export function MapVisualManager({
             </div>
           )}
 
-          <div className="grid grid-cols-3 gap-3">
-            {/* Frame Interval in Seconds */}
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-muted-foreground">Interval Frame (detik)</label>
-              <input
-                type="number"
-                min={0.1}
-                step={0.1}
-                value={frameIntervalSec}
-                onChange={(e) => setFrameIntervalSec(parseFloat(e.target.value))}
-                className="border rounded-md bg-background px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-            </div>
-
+          <div className="grid grid-cols-2 gap-3">
             {/* Start Second */}
             <div className="flex flex-col gap-1">
               <div className="flex items-center justify-between">
@@ -640,28 +775,77 @@ export function MapVisualManager({
 
           {/* SSE Progress Panel — shown while a job is active */}
           {activeJobId && (
-            <div className="rounded-lg border bg-muted/20 p-3 space-y-2">
-              <div className="flex items-center justify-between gap-2">
+            <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
+              {/* Status Banner */}
+              <div className={`flex items-center gap-2 rounded-md px-3 py-2 ${
+                sseError
+                  ? 'border border-red-500/30 bg-red-500/10'
+                  : sseDone
+                  ? 'border border-green-500/30 bg-green-500/10'
+                  : 'border border-blue-500/30 bg-blue-500/10'
+              }`}>
                 {!sseDone && !sseError && (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />
-                    <p className="text-xs text-foreground flex-1 truncate">
-                      {sseStatus || 'Menunggu...'}
-                    </p>
-                  </>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600 dark:text-blue-400 shrink-0" />
                 )}
                 {sseDone && (
-                  <>
-                    <Check className="h-4 w-4 text-green-600 shrink-0" />
-                    <p className="text-xs text-green-600 font-medium flex-1">
-                      {sseStatus || 'Selesai'}
-                    </p>
-                  </>
+                  <Check className="h-3.5 w-3.5 text-green-600 dark:text-green-400 shrink-0" />
                 )}
                 {sseError && (
-                  <p className="text-xs text-destructive flex-1">{sseError}</p>
+                  <AlertTriangle className="h-3.5 w-3.5 text-red-600 dark:text-red-400 shrink-0" />
                 )}
+                <span className={`text-xs font-semibold ${
+                  sseError
+                    ? 'text-red-700 dark:text-red-400'
+                    : sseDone
+                    ? 'text-green-700 dark:text-green-400'
+                    : 'text-blue-700 dark:text-blue-400'
+                }`}>
+                  {sseError
+                    ? 'Gagal'
+                    : sseDone
+                    ? 'Selesai'
+                    : 'Mengolah Video...'}
+                </span>
               </div>
+
+              {/* Error detail */}
+              {sseError && (
+                <p className="text-xs text-destructive">{sseError}</p>
+              )}
+
+              {/* Stage & Progress */}
+              {!sseError && (
+                <div className="space-y-1.5">
+                  {sseStatus && (
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs text-muted-foreground truncate mr-2">
+                        Status: <span className="font-mono text-xs text-foreground bg-muted/50 px-1.5 py-0.5 rounded">{cleanSseStatus(sseStatus)}</span>
+                      </p>
+                      {parseVideoPercent(sseStatus) !== null && (
+                        <span className="text-xs font-semibold text-foreground shrink-0">
+                          {Math.round(parseVideoPercent(sseStatus)!)}%
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Progress Bar */}
+                  <div className="w-full h-2 rounded-full bg-muted overflow-hidden">
+                    {parseVideoPercent(sseStatus) !== null ? (
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ease-out ${
+                          sseDone ? 'bg-green-500' : 'bg-blue-500'
+                        }`}
+                        style={{ width: `${Math.min(100, Math.max(0, parseVideoPercent(sseStatus)!))}%` }}
+                      />
+                    ) : (
+                      !sseDone && (
+                        <div className="h-full w-1/3 rounded-full bg-blue-500/60 animate-pulse" />
+                      )
+                    )}
+                  </div>
+                </div>
+              )}
 
               {(sseDone || sseError) && (
                 <Button
@@ -744,8 +928,8 @@ export function MapVisualManager({
       {selectedVideoId && (
         <div className="space-y-3 pt-1">
           <div className="flex items-center gap-2">
-            <Globe className="h-4 w-4 text-primary" />
-            <h3 className="font-semibold text-sm">Upload ke WebODM</h3>
+            <MapIcon className="h-4 w-4 text-primary" />
+            <h3 className="font-semibold text-sm">Buat Peta</h3>
           </div>
 
           {/* Warning when video is not yet parsed */}
@@ -753,7 +937,7 @@ export function MapVisualManager({
             <div className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2">
               <AlertTriangle className="h-3.5 w-3.5 text-amber-600 shrink-0" />
               <p className="text-xs text-amber-700 dark:text-amber-400">
-                Video belum diolah. Olah video terlebih dahulu sebelum upload ke WebODM.
+                Video belum diolah. Olah video terlebih dahulu sebelum membuat peta.
               </p>
             </div>
           )}
@@ -883,14 +1067,177 @@ export function MapVisualManager({
                   const jobId: string = res.data.job_id;
                   subscribeToWebodmJob(jobId);
                 } catch (err: any) {
-                  setWebodmError(err.response?.data?.message || err.message || 'Gagal upload ke WebODM');
+                  setWebodmError(err.response?.data?.message || err.message || 'Gagal membuat peta');
                 } finally {
                   setWebodmUploading(false);
                 }
               }}
             >
-              {webodmUploading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Globe className="h-4 w-4 mr-2" />}
-              Upload ke WebODM
+              {webodmUploading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <MapIcon className="h-4 w-4 mr-2" />}
+              Buat Peta
+            </Button>
+          )}
+        </div>
+      )}
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2">
+            <MapIcon className="h-4 w-4 text-primary" />
+            <h3 className="font-semibold text-sm">Dari File Foto</h3>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs font-semibold text-muted-foreground uppercase">
+              Nama Koleksi Foto
+            </label>
+            <input
+              type="text"
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              placeholder="Masukkan nama koleksi, misal: Lahan_A_29Juni"
+              value={imageCollectionName}
+              onChange={(e) => setImageCollectionName(e.target.value)}
+              disabled={imagesUploading || webodmUploading}
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs font-semibold text-muted-foreground uppercase">
+              Pilih File Foto
+            </label>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-9 text-xs"
+                onClick={() => imagesInputRef.current?.click()}
+                disabled={imagesUploading || webodmUploading}
+              >
+                Pilih Foto
+              </Button>
+              <span className="text-xs text-muted-foreground truncate max-w-[200px]">
+                {imageFiles.length > 0 ? `${imageFiles.length} foto terpilih` : 'Belum ada foto terpilih'}
+              </span>
+              <input
+                ref={imagesInputRef}
+                type="file"
+                multiple
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files) {
+                    setImageFiles(Array.from(e.target.files));
+                  }
+                }}
+              />
+            </div>
+          </div>
+
+          {imagesUploadError && (
+            <p className="text-xs text-destructive">{imagesUploadError}</p>
+          )}
+
+          {/* WebODM SSE Progress Panel */}
+          {webodmJobId && (
+            <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
+              <div className={`flex items-center gap-2 rounded-md px-3 py-2 ${
+                webodmSseError
+                  ? 'border border-red-500/30 bg-red-500/10'
+                  : webodmSseDone
+                  ? 'border border-green-500/30 bg-green-500/10'
+                  : 'border border-blue-500/30 bg-blue-500/10'
+              }`}>
+                {!webodmSseDone && !webodmSseError && (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600 dark:text-blue-400 shrink-0" />
+                )}
+                {webodmSseDone && (
+                  <Check className="h-3.5 w-3.5 text-green-600 dark:text-green-400 shrink-0" />
+                )}
+                {webodmSseError && (
+                  <AlertTriangle className="h-3.5 w-3.5 text-red-600 dark:text-red-400 shrink-0" />
+                )}
+                <span className={`text-xs font-semibold ${
+                  webodmSseError
+                    ? 'text-red-700 dark:text-red-400'
+                    : webodmSseDone
+                    ? 'text-green-700 dark:text-green-400'
+                    : 'text-blue-700 dark:text-blue-400'
+                }`}>
+                  {webodmSseError
+                    ? 'Gagal'
+                    : webodmSseDone
+                    ? 'Selesai'
+                    : webodmSseProgress.status || 'Memproses...'}
+                </span>
+              </div>
+
+              {webodmSseError && (
+                <p className="text-xs text-destructive">{webodmSseError}</p>
+              )}
+
+              {!webodmSseError && (
+                <div className="space-y-1.5">
+                  {webodmSseProgress.stage && (
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs text-muted-foreground">
+                        Tahap: <span className="font-medium text-foreground">{webodmSseProgress.stage}</span>
+                      </p>
+                      {webodmSseProgress.webodmPercent !== null && (
+                        <span className="text-xs font-semibold text-foreground">
+                          {Math.round(webodmSseProgress.webodmPercent)}%
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="w-full h-2 rounded-full bg-muted overflow-hidden">
+                    {webodmSseProgress.webodmPercent !== null ? (
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ease-out ${
+                          webodmSseDone ? 'bg-green-500' : 'bg-blue-500'
+                        }`}
+                        style={{ width: `${Math.min(100, Math.max(0, webodmSseProgress.webodmPercent))}%` }}
+                      />
+                    ) : (
+                      !webodmSseDone && (
+                        <div className="h-full w-1/3 rounded-full bg-blue-500/60 animate-pulse" />
+                      )
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {(webodmSseDone || webodmSseError) && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full h-7 text-xs"
+                  onClick={() => {
+                    setWebodmJobId(null);
+                    setWebodmSseProgress(DEFAULT_WEBODM_PROGRESS);
+                    setWebodmSseDone(false);
+                    setWebodmSseError(null);
+                  }}
+                >
+                  Tutup
+                </Button>
+              )}
+            </div>
+          )}
+
+          {!webodmJobId && (
+            <Button
+              className="w-full mt-2"
+              disabled={!imageCollectionName || imageFiles.length === 0 || imagesUploading || webodmUploading}
+              onClick={handleDirectImagesUploadAndBuildMap}
+            >
+              {imagesUploading || webodmUploading ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <MapIcon className="h-4 w-4 mr-2" />
+              )}
+              Unggah Foto & Buat Peta
             </Button>
           )}
         </div>
@@ -898,10 +1245,28 @@ export function MapVisualManager({
 
       <div className="border-t border-border/50" />
 
-      {/* Drone Imagery (2D Visual) */}
-      <div className="flex items-center gap-2 mb-2">
-        <MapIcon className="h-5 w-5 text-primary" />
-        <h3 className="font-semibold text-sm">Drone Imagery (2D Visual)</h3>
+      {/* Peta Lahan (2D Visual) */}
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <MapIcon className="h-5 w-5 text-primary" />
+          <h3 className="font-semibold text-sm">Peta Lahan (2D Visual)</h3>
+        </div>
+        {initialVisualUrl && !file && !mapNotFound && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs flex items-center gap-1.5 transition-transform active:scale-95 duration-100"
+            onClick={handleRefreshCache}
+            disabled={refreshing}
+          >
+            {refreshing ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3 w-3" />
+            )}
+            Update Peta
+          </Button>
+        )}
       </div>
 
       {initialVisualUrl && !file && (
@@ -941,8 +1306,11 @@ export function MapVisualManager({
               <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-lg cursor-pointer bg-muted/5 hover:bg-muted/10 transition-colors">
                 <div className="flex flex-col items-center justify-center pt-5 pb-6">
                   <Upload className="w-8 h-8 mb-2 text-muted-foreground" />
-                  <p className="text-xs text-muted-foreground">
-                    {file ? file.name : "Upload Orthophoto (PNG/JPG/JPEG/TIF)"}
+                  <p className="text-xs text-muted-foreground font-semibold">
+                    {file ? file.name : (!initialVisualUrl || mapNotFound ? "Atau upload peta langsung" : "Upload Orthophoto")}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    Format file harus berupa PNG, JPG, atau TIF
                   </p>
                 </div>
                 <input 
@@ -971,7 +1339,8 @@ export function MapVisualManager({
               <Check className="h-3 w-3" /> Visual Aktif
             </span>
             <Button variant="ghost" size="sm" className="h-7 text-xs text-destructive" onClick={async () => {
-              if(confirm('Hapus visual peta ini?')) {
+              const confirmed = await dialog.confirm('Hapus visual peta ini?');
+              if (confirmed) {
                 await apiClient.delete(`/fields/${fieldId}/map-visual`);
                 onSuccess();
               }

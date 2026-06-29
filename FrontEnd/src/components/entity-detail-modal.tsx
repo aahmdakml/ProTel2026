@@ -22,9 +22,10 @@ interface EntityDetailModalProps {
   onClose: () => void;
   title: string;
   data: any;
+  excludeKeys?: string[];
 }
 
-export function EntityDetailModal({ isOpen, onClose, title, data }: EntityDetailModalProps) {
+export function EntityDetailModal({ isOpen, onClose, title, data, excludeKeys = [] }: EntityDetailModalProps) {
   const miniMapRef = useRef<HTMLDivElement>(null);
   const [fieldData, setFieldData] = useState<any>(null);
 
@@ -147,7 +148,7 @@ export function EntityDetailModal({ isOpen, onClose, title, data }: EntityDetail
         <div className="p-6 overflow-y-auto flex-1">
           <div className="grid grid-cols-2 gap-4">
             {Object.entries(data)
-              .filter(([key]) => key !== 'polygonGeom' && key !== 'centroid')
+              .filter(([key]) => key !== 'polygonGeom' && key !== 'centroid' && !excludeKeys.includes(key))
               .map(([key, value]) => (
                 <div key={key} className="border-b pb-2">
                   <p className="text-[10px] uppercase font-bold text-muted-foreground">{key.replace(/([A-Z])/g, ' $1')}</p>

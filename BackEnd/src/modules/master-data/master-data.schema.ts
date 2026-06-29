@@ -42,6 +42,7 @@ export const CreateFieldSchema = z.object({
   is_source_depleted:   z.boolean().default(false),
   notes:                z.string().max(2000).optional(),
   assigned_file_name:   z.string().max(500).optional(),
+  map_headers:          z.any().optional().nullable(),
   irrigation_edges:     z.array(z.any()).optional().nullable(),
   irrigation_nodes:     z.array(z.any()).optional().nullable(),
 });
@@ -158,7 +159,6 @@ export const CreateRuleProfileSchema = z.object({
   description:             z.string().max(1000).optional(),
   bucket_code:             z.string().min(1),
   phase_code:              z.string().min(1),
-  awd_lower_threshold_cm:  z.coerce.number(),
   awd_upper_target_cm:     z.coerce.number(),
   drought_alert_cm:        z.coerce.number().optional(),
   min_saturation_days:     z.coerce.number().int().min(0).default(1),
@@ -186,6 +186,7 @@ export const CreateIrrigationPointSchema = z.object({
   point_type:       z.string().min(1).max(100),
   coordinate_point: GeoJsonPointSchema.optional(),
   elevation_m:      z.coerce.number().optional(),
+  callibrated_elevation: z.coerce.number().optional(),
   name:             z.string().max(200).optional(),
   assigned_sub_blocks: z.array(z.string().uuid()).default([]),
 });

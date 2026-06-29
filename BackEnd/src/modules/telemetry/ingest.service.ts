@@ -1,4 +1,4 @@
-import { eq, and, inArray, sql } from 'drizzle-orm';
+import { eq, and, inArray, sql, desc } from 'drizzle-orm';
 import { randomUUID } from 'crypto';
 import { db } from '@/db/client';
 import {
@@ -6,6 +6,7 @@ import {
   sensorCalibrations as sensorCalibrationsTable,
   alertConfigs as alertConfigsTable,
   subBlocks as subBlocksTable,
+  irrigationPoints as irrigationPointsTable,
 } from '@/db/schema/mst';
 import {
   telemetryBatches as batchesTable,
@@ -15,6 +16,7 @@ import {
 } from '@/db/schema';
 import { logger } from '@/shared/utils/logger.util';
 import { normalizeReading, type CalibrationOffsets } from './normalizer';
+import { recalibrateFieldElevations } from './elevation-calibration';
 import type { BatchPayload } from './ingest.schema';
 
 // ---------------------------------------------------------------------------
@@ -152,14 +154,139 @@ export async function processBatch(payload: BatchPayload): Promise<BatchResult> 
         }
 
         // 5g. Automatically update sub-block elevation calibration if pressure telemetry is present
-        if (norm.pressure !== null && device.subBlockId) {
-          const elevationVal = 44330 * (1 - Math.pow(norm.pressure / 1013.25, 0.1903));
-          await db.update(subBlocksTable)
-            .set({
-              elevationCalibration: elevationVal.toFixed(2),
-              updatedAt: new Date(),
+        // 5g. Automatically update sub-block elevation calibration if it's new data of the sub-block
+        if (device.subBlockId) {
+          let pressureVal = norm.pressure;
+          if (pressureVal === null) {
+            // Find the latest telemetry record with pressure on this field
+            const [latestPressureRecord] = await db.select({
+              pressure: recordsTable.pressure,
             })
-            .where(eq(subBlocksTable.id, device.subBlockId));
+              .from(recordsTable)
+              .innerJoin(devicesTable, eq(devicesTable.id, recordsTable.deviceId))
+              .where(and(
+                eq(devicesTable.fieldId, device.fieldId),
+                sql`${recordsTable.pressure} IS NOT NULL`
+              ))
+              .orderBy(desc(recordsTable.eventTimestamp))
+              .limit(1);
+
+            if (latestPressureRecord && latestPressureRecord.pressure !== null) {
+              pressureVal = parseFloat(latestPressureRecord.pressure.toString());
+            }
+          }
+
+          if (pressureVal !== null) {
+            const stationCode = (device.deviceType === 'station' || device.deviceType === 'weather_station')
+              ? device.deviceCode
+              : device.parentStation;
+
+            let stationPoint = null;
+            if (stationCode) {
+              [stationPoint] = await db.select({
+                coordinatePoint: irrigationPointsTable.coordinatePoint,
+                elevationM: irrigationPointsTable.elevationM,
+              })
+                .from(irrigationPointsTable)
+                .where(and(
+                  eq(irrigationPointsTable.fieldId, device.fieldId),
+                  eq(irrigationPointsTable.name, stationCode)
+                ))
+                .limit(1);
+            }
+
+            if (!stationPoint) {
+              [stationPoint] = await db.select({
+                coordinatePoint: irrigationPointsTable.coordinatePoint,
+                elevationM: irrigationPointsTable.elevationM,
+              })
+                .from(irrigationPointsTable)
+                .where(and(
+                  eq(irrigationPointsTable.fieldId, device.fieldId),
+                  sql`${irrigationPointsTable.pointType} IN ('station', 'weather_station')`
+                ))
+                .limit(1);
+            }
+
+            let refSubBlock = null;
+
+            // 1. Get the station device and its assigned sub-block ID
+            let stationDevice = null;
+            if (stationCode) {
+              [stationDevice] = await db.select({
+                subBlockId: devicesTable.subBlockId,
+              })
+                .from(devicesTable)
+                .where(and(
+                  eq(devicesTable.fieldId, device.fieldId),
+                  eq(devicesTable.deviceCode, stationCode),
+                  sql`${devicesTable.deviceType} IN ('station', 'weather_station')`
+                ))
+                .limit(1);
+            }
+
+            if (!stationDevice) {
+              [stationDevice] = await db.select({
+                subBlockId: devicesTable.subBlockId,
+              })
+                .from(devicesTable)
+                .where(and(
+                  eq(devicesTable.fieldId, device.fieldId),
+                  sql`${devicesTable.deviceType} IN ('station', 'weather_station')`
+                ))
+                .limit(1);
+            }
+
+            // 2. If station has an assigned sub-block, use it as reference
+            if (stationDevice && stationDevice.subBlockId) {
+              [refSubBlock] = await db.select({
+                id: subBlocksTable.id,
+                elevationM: subBlocksTable.elevationM,
+              })
+                .from(subBlocksTable)
+                .where(eq(subBlocksTable.id, stationDevice.subBlockId))
+                .limit(1);
+            }
+
+            // 3. Fallback: if no assigned sub-block, find the nearest one to the station point
+            if (!refSubBlock && stationPoint && stationPoint.coordinatePoint) {
+              [refSubBlock] = await db.select({
+                id: subBlocksTable.id,
+                elevationM: subBlocksTable.elevationM,
+              })
+                .from(subBlocksTable)
+                .where(eq(subBlocksTable.fieldId, device.fieldId))
+                .orderBy(sql`ST_Distance(${subBlocksTable.centroid}, ${stationPoint.coordinatePoint})`)
+                .limit(1);
+            }
+
+            // 4. Fallback: if still no sub-block, use any sub-block on this field
+            if (!refSubBlock) {
+              [refSubBlock] = await db.select({
+                id: subBlocksTable.id,
+                elevationM: subBlocksTable.elevationM,
+              })
+                .from(subBlocksTable)
+                .where(eq(subBlocksTable.fieldId, device.fieldId))
+                .limit(1);
+            }
+
+            let refElevationM = 0;
+            if (refSubBlock && refSubBlock.elevationM !== null) {
+              refElevationM = parseFloat(refSubBlock.elevationM.toString());
+            } else if (stationPoint && stationPoint.elevationM !== null) {
+              refElevationM = parseFloat(stationPoint.elevationM.toString());
+            }
+            const elevationVal = 44330 * (1 - Math.pow(pressureVal / 1013.25, 0.1903));
+            const calibrationOffset = elevationVal - refElevationM;
+
+            await recalibrateFieldElevations(device.fieldId, device.subBlockId, pressureVal);
+
+            await db.update(irrigationPointsTable)
+              .set({
+                callibratedElevation: sql`COALESCE(${irrigationPointsTable.elevationM}, 0) + ${calibrationOffset.toFixed(2)}`,
+              })
+              .where(eq(irrigationPointsTable.fieldId, device.fieldId));          }
         }
 
         processed++;
