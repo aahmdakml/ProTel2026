@@ -14,9 +14,16 @@ docs/
 ├── protel_smart_awd_technical_documentation.md   ← Ikhtisar sistem tingkat tinggi
 │
 ├── logic/                            ← Dokumentasi logika & algoritma inti
+│   ├── sys_archi_general.md          ← [1 GENERAL] Arsitektur Ekosistem Keseluruhan
+│   ├── sys_archi_fe.md               ← [SPESIFIK] Arsitektur Isolasi FrontEnd
+│   ├── sys_archi_be.md               ← [SPESIFIK] Arsitektur Isolasi BackEnd
+│   ├── sys_archi_model.md            ← [SPESIFIK] Arsitektur Isolasi Model DSS
+│   ├── sys_archi_gis_risang.md       ← [SPESIFIK] Arsitektur Isolasi GIS Processing
+│   ├── sys_archi_webodm.md           ← [SPESIFIK] Arsitektur Isolasi WebODM Cluster
+│   ├── sys_archi_utils.md            ← [SPESIFIK] Arsitektur Isolasi Utilitas & Skrip
 │   ├── dss_logic_flow.md             ← Alur keputusan DSS AWD (Mermaid Flowchart)
 │   ├── smart_awd_resilience_logic.md ← 5 mekanisme pertahanan DSS
-│   ├── mod_sys_architecture_c4.md    ← Arsitektur sistem C4 (diagram)
+│   ├── mod_sys_architecture_c4.md    ← Arsitektur sistem C4 lama (referensi)
 │   ├── mod_be_scheduler_state.md     ← Cron jobs & state builder
 │   ├── mod_be_telemetry_ingestion.md ← Pipeline MQTT → DB
 │   ├── mod_be_node_resolver.md       ← 4-level fallback resolver
