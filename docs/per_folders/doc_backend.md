@@ -5,7 +5,7 @@
 
 **BackEnd** (`d:\PROTEL\src\BackEnd`) adalah *pusat saraf* sistem Smart AWD. Ini adalah Express API server berbasis TypeScript yang bertindak sebagai **Orchestrator** — mengorkestrasi aliran data antara sensor IoT, database, Python DSS engine, dan FrontEnd.
 
-**Stack:** Node.js 20 · Express · TypeScript · Drizzle ORM · Zod Validation · Pino Logger
+**Stack:** Node.js 20 · Express (bukan NestJS) · TypeScript · Drizzle ORM · Zod Validation · Pino Logger · `mqtt` npm package
 
 ---
 
@@ -103,7 +103,8 @@ BackEnd/
 | `NODE_ENV` | | `development` | `development` / `production` |
 | `CORS_ORIGIN` | | `http://localhost:5173` | Multiple origins: comma-separated |
 | `DECISION_ENGINE_URL` | | `http://localhost:8000` | URL Python DSS service |
-| `GIS_SERVICE_URL` | | `http://localhost:8003` | URL GIS Processing service |
+| `MQTT_URL` | | `mqtt://localhost:1883` | EMQX Broker URL (via Docker compose di GIS project) |
+| `GISPROC_API_BASE_URI` | | `http://localhost:8001` | URL GIS Processing service (bukan 8003) |
 | `BMKG_BASE_URL` | | `https://api.bmkg.go.id/publik/prakiraan-cuaca` | Base URL API BMKG |
 | `R2_ENDPOINT` | | — | Cloudflare R2 endpoint |
 | `R2_ACCESS_KEY_ID` | | — | R2 Access Key |
@@ -114,21 +115,20 @@ BackEnd/
 
 ## 4. Mekanisme Komponen Inti
 
-### A. MQTT Telemetry Ingestion (`/modules/telemetry/ingest.router.ts`)
-Gateway menerima data dari ESP8266 (melalui broker MQTT). Setiap device terdaftar di database dengan **MQTT topic unik** yang dibangkitkan otomatis via PostgreSQL trigger.
+### A. MQTT Telemetry Ingestion (`mqtt.service.ts` + `ingest.router.ts`)
+BackEnd menjalankan **MQTT listener internal** (`startMqttListener()`) yang connect ke EMQX broker saat server start. Subscribe ke topic **`sensor/data`** (topic generik, bukan per-device).
 
-**Payload format:**
+**Payload yang diterima dari ESP8266:**
 ```json
 {
-  "device_code": "RiceMesh-N1",
-  "water_level_raw_cm": 8.5,
-  "water_level_cm": 8.2,
-  "temperature_c": 29.6,
-  "humidity_pct": 75.0,
-  "event_timestamp": "2026-06-20T10:00:00Z"
+  "device": [{"id": "N1", "d": 412}, {"id": "N2", "d": null}],
+  "temperature": "29.63",
+  "pressure": "1006.53"
 }
 ```
-Data langsung di-`BATCH INSERT` ke `trx.telemetry_records` (TimescaleDB hypertable) tanpa komputasi apapun, menjaga throughput ingest tetap tinggi.
+Proses: lookup device di DB → baca kalibrasi aktif (`sensor_max_distance_mm`) → konversi `d` (tick) ke cm → batch insert ke `trx.telemetry_records`.
+
+> ⚠️ **EMQX berjalan di Docker (GIS project):** `docker compose up` di `gis_risang/ricemesh-gis-processing/` akan start EMQX, Redis, dan MongoDB sekaligus.
 
 ### B. State Builder (`/modules/state-builder/`)
 State builder berjalan tiap **10 menit** melalui cron job. Alurnya:
@@ -164,13 +164,17 @@ Level 4: ABORT — field ini dilewati dari routing cycle
 
 ### E. Water Routing Orchestrator (`routing.service.ts`)
 Setelah DSS mengeluarkan rekomendasi, BackEnd:
-1. Identifikasi sub-block `DRAIN` tertinggi dan `IRRIGATE` terendah berdasarkan `priority_score`.
-2. Ekstrak koordinat centroid PostGIS tiap sub-block.
-3. Bangun *directed graph* (nodes + edges) berdasarkan ketinggian (`elevation_m`).
-4. `POST /run` ke GIS Processing Service.
-5. Polling hasil Floyd-Warshall dari Redis.
-6. Konversi indeks hasil ke UUID array sub-blocks.
-7. Simpan ke `trx.irrigation_recommendations.route_path_ids`.
+1. Filter rekomendasi: `drain` = sources, `irrigate` = targets.
+2. Load sub-blocks dengan centroid PostGIS (`ST_AsEWKT`).
+3. Load **embankments** → derive koneksi antar sub-block dari `connected_sub_blocks[]`.
+4. Fallback: jika tidak ada embankment, cek `fields.irrigation_edges` JSON.
+5. Load **irrigation points** (source/drain) → tambahkan ke node graph.
+6. Build nodes[] + edges[] payload dengan water_height via 4-level resolver.
+7. **Synchronous call:** `POST GISPROC_API_BASE_URI/api/floydwarshall/run` (timeout 15 detik).
+8. Ambil rute: `POST /api/floydwarshall/matrix` untuk setiap pasangan source-target.
+9. Update `trx.irrigation_recommendations.route_path_ids` dengan array UUID sub-blocks jalur air.
+
+> **Catatan:** Floyd-Warshall dieksekusi **synchronous** di GIS Processing service (bukan via ARQ Worker). ARQ Worker di GIS bertugas khusus untuk **video processing** drone.
 
 ### F. Embankments Module (`/modules/master-data/`)  ← BARU
 Tabel `mst.embankments` merepresentasikan **pematang sawah** (galengan) secara fisik. Setiap embankment:

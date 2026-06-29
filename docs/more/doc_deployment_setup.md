@@ -140,25 +140,47 @@ uvicorn app.main:app --reload --port 8000
 
 ---
 
-## 7. GIS Processing Service (Opsional)
+## 7. GIS Processing Service (Termasuk Docker Infrastructure)
 
-Service ini (`d:\PROTEL\gis_risang\ricemesh-gis-processing`) adalah komponen **opsional** yang diperlukan untuk fitur Water Routing (Floyd-Warshall). Jika tidak dijalankan, sistem tetap berfungsi untuk DSS evaluation — hanya fitur routing air di peta yang tidak aktif.
+Service GIS (`gis_risang/ricemesh-gis-processing`) mencakup:
+- **Docker Compose:** Start EMQX (MQTT Broker), Redis, MongoDB — **wajib untuk seluruh sistem**
+- **FastAPI Server:** Floyd-Warshall API + Video Ops + WebODM management (port **8001**)
+- **ARQ Worker:** Background video processing (upload/parse frame drone video)
+
+> ⚠️ **PENTING:** EMQX broker berjalan DI DALAM Docker GIS project ini. Tanpa `docker compose up`, BackEnd tidak bisa menerima data MQTT dari ESP8266!
 
 ```bash
-# Prasyarat: Redis harus berjalan
-redis-server
+# Prasyarat: Docker Desktop berjalan
 
-# Setup GIS Processing (di repo terpisah)
+# Start semua infrastruktur (EMQX, Redis, MongoDB)
 cd d:\PROTEL\gis_risang\ricemesh-gis-processing
+docker compose up -d         # Start EMQX (1883), Redis (6379), MongoDB (27017)
+
+# Setup Python GIS
 python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
+.venv\Scripts\activate       # Windows
+# source .venv/bin/activate  # Mac/Linux
+pip install -e .[dev]        # atau: uv sync
 
-# Jalankan FastAPI service
-uvicorn src.main:app --reload --port 8003
+# Jalankan FastAPI service (Port 8001)
+cd src
+uvicorn server.server:gisProc --reload --port 8001
 
-# Jalankan ARQ Worker (di terminal terpisah)
-python -m arq src.arq_worker.worker.WorkerSettings
+# Jalankan ARQ Worker (di terminal terpisah) — untuk video processing drone
+arq arq_worker.settings.WorkerSettings
+```
+
+**Environment GIS `.env` penting:**
+```env
+REDIS_HOST=localhost
+REDIS_PORT=6379
+EMQX_MQTT_HOST=localhost
+EMQX_MQTT_PORT=1883
+EMQX_MQTT_USER=admin
+EMQX_MQTT_PASS=public
+RICEMESH_API_HOST=http://localhost:3000   # Server 1 — untuk device bootstrap
+RICEMESH_API_EMAIL=admin@smartawd.id
+RICEMESH_API_PASS=DevPassword123!
 ```
 
 ---
@@ -203,14 +225,16 @@ pio run --target upload
 
 ## 10. Urutan Startup yang Benar
 
-Untuk sistem berjalan dengan baik, urutan startup yang disarankan:
-1. ✅ Pastikan Supabase database accessible
-2. ✅ Jalankan MQTT Broker (Mosquitto)
-3. ✅ Jalankan Redis (jika menggunakan GIS routing)
-4. ✅ Jalankan BackEnd Node.js
-5. ✅ Jalankan Python DSS Service
-6. ✅ (Opsional) Jalankan GIS Processing + ARQ Worker
-7. ✅ Jalankan FrontEnd React
+Urutan startup yang WAJIB diikuti:
+1. ✅ **GIS Docker:** `docker compose up -d` di `gis_risang/ricemesh-gis-processing/` → start EMQX, Redis, MongoDB
+2. ✅ Pastikan Supabase database accessible
+3. ✅ Jalankan **Server 2 (Python DSS):** `uvicorn app.main:app --port 8000`
+4. ✅ Jalankan **Server 1 (BackEnd Node.js):** `npm run dev` → auto-connect EMQX, start scheduler
+5. ✅ Jalankan **Server 3 (GIS FastAPI):** `uvicorn server.server:gisProc --port 8001` → auto-login Server 1, fetch device topics, subscribe EMQX
+6. ✅ (Opsional) Jalankan **ARQ Worker** (untuk video drone): `arq arq_worker.settings.WorkerSettings`
+7. ✅ Jalankan **FrontEnd React:** `npm run dev` (port 5173)
+
+> ⚠️ Server 3 HARUS start setelah Server 1 — karena Server 3 login ke Server 1 untuk fetch device topics saat startup.
 
 Helper scripts tersedia di root `/src`:
 ```bash
