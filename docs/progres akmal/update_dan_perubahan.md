@@ -1,61 +1,119 @@
-# Recap Update & Perubahan Sistem (AWD DSS)
+# 📋 Changelog & Progress Report ProTel
+> **Terakhir diperbarui:** 29 Juni 2026
 
-Dokumen ini berisi rekapitulasi progres pengembangan yang telah diselesaikan, perubahan arsitektur yang terjadi, serta analisa kesiapan sistem untuk fase *deployment* dan *testing* lapangan.
-
-## 1. Rekap Perbaikan & Pengembangan yang Selesai Dikerjakan
-
-Selama sesi pengembangan terbaru, sistem telah mengalami penyempurnaan masif dari segi ketahanan jaringan, integritas database, dan kecerdasan pengambilan keputusan. Berikut rinciannya:
-
-### A. Perbaikan Jaringan & Konektivitas
-*   **Perbaikan Bug Resolusi DNS (IPv6):** Memperbaiki masalah `ENOTFOUND` saat backend mencoba menarik data dari API BMKG karena prioritas IPv6 bawaan Node.js. Telah ditambahkan konfigurasi `dns.setDefaultResultOrder('ipv4first')` untuk memaksa resolusi IPv4.
-*   **Sentralisasi URL:** Base URL BMKG sekarang diatur secara terpusat melalui variabel *environment* `.env` (`BMKG_BASE_URL`).
-
-### B. Pembaruan Skema Database (Tracking Data)
-*   **Tracking Versi Cuaca:** Menambahkan file migrasi `0007_add_bmkg_flags.sql` ke dalam *database* untuk memasukkan kolom `is_latest` dan `is_stale` pada tabel `weather_forecast_snapshots`. Hal ini memastikan DSS selalu mengambil data cuaca termutakhir tanpa kebingungan tumpang tindih data lama.
-
-### C. Evolusi "Rain Event Detection" (Deteksi Kejadian Hujan)
-*   **Logika Baru:** Mengubah logika primitif (yang sekadar menjumlahkan total volume hujan dalam 24 jam) menjadi algoritma **Deteksi Kejadian Hujan (Rain Event Detection)** yang jauh lebih presisi.
-*   **Windowing 12 Jam:** Sistem kini hanya fokus pada prediksi 12 jam ke depan (terbagi dalam 4 slot @3 jam) agar prediksi lebih tajam dan akurat.
-*   **Penyimpanan Metadata JSON:** Hasil analisa kompleks ini (seperti durasi, puncak curah hujan, waktu tiba) disuntikkan dengan rapi ke dalam kolom `full_response_json` tipe JSONB di *database* tanpa merusak skema yang sudah ada.
-
-### D. Perombakan Otak Keputusan (Python DSS Engine)
-*   **Matrix Veto Hujan Bertingkat:** DSS (Decision Support System) di Python telah dirombak. Keputusan tidak lagi "tutup irigasi asalkan ada hujan", melainkan menyilangkan **Level Air Lahan Saat Ini** dengan **Kehebatan Badai yang Akan Datang**.
-*   **Exception Handling:** Memasukkan logika pengecualian kritis, misalnya: jika lahan mengalami **Kritis Kering** (`<= drought_alert`), irigasi akan **tetap dibuka** tanpa memedulikan apakah akan ada hujan lebat atau tidak.
+Dokumen ini berisi rekapitulasi lengkap seluruh perubahan, penyempurnaan, dan perkembangan sistem dari awal pengembangan hingga saat ini.
 
 ---
 
-## 2. Kesiapan Deployment dan Testing (Readiness Report)
+## ✅ Sprint Terakhir (Commit: e69ea65f — 21 Juni 2026)
 
-Berdasarkan pengecekan aliran data secara End-to-End (E2E), sistem sudah **100% Siap untuk Deployment dan Uji Coba Lapangan**.
+### Perubahan Terbaru (berdasarkan git log & source code)
 
-### Keunggulan Sistem Saat Ini:
-1. **Fully Connected Pipeline:** Tidak ada modul yang berdiri sendiri. Data mengalir sempurna dari:
-   `API BMKG ➡️ Database PostgreSQL ➡️ Node.js State Builder ➡️ Python DSS Engine ➡️ Node.js Routing Orchestrator ➡️ Python GIS Processing`.
-2. **Pencegahan Spam Notifikasi:** Keluaran prediksi DSS mengikat pada stempel waktu kedatangan hujan (`starts_at`). Karena ini beroperasi di jendela waktu 3 jam, *user* tidak akan kelelahan mendapat *alert* notifikasi yang berubah-ubah setiap menit.
-3. **Graceful Fallbacks:** Jika tidak ada data sensor di lapangan, sistem secara otomatis melakukan interpolasi hingga 4 level (mencari rata-rata lahan). Jika API BMKG mati, DSS masih bisa bekerja dengan data snapshot terakhir.
+#### 1. Pembersihan Repository (Clean Architecture)
+- Commit `75c79762`, `107e16f5`, `ffe0efa1`, `38c8a431`: Hapus artefak build (`dist/` & `node_modules/`) dari repository. Repositori kini bersih — hanya source code yang di-track.
+- Total: ~26.000 baris kode build artifact dihapus.
 
-### Rekomendasi Tahap Lanjutan:
-*   **Testing Skenario Ekstrem (Simulasi):** Sangat disarankan untuk membuat skrip *mocking* untuk menyuntikkan level air palsu (contoh: *water level* +10cm dari batas atas) lalu dipasangkan dengan prediksi *Heavy Rain* untuk melihat apakah `DRAIN_CRITICAL_RAIN` benar-benar ter- *trigger* di *Dashboard Frontend*.
-*   **Memonitor Beban GIS:** Memantau kecepatan respon dari Python GIS Processing (`floydwarshall/run`) saat beban puncak jaringan *nodes* mencapai >100 sub-blok dalam satu hamparan.
+#### 2. Penyempurnaan Visualisasi DSS (Commit: `e69ea65f`, `455fbf60`)
+- `FrontEnd/src/pages/master/fields.tsx`: Update tampilan peta field dengan integrasi data DSS.
+- `FrontEnd/src/pages/monitoring/map.tsx`: Penyempurnaan rendering polygon OpenLayers + overlay rekomendasi DSS.
+- `FrontEnd/src/pages/tasks.tsx`: Update UI task management operator lapangan (+62 baris baru).
+
+#### 3. Update Logika Override DSS (Commit: `64a1f485`, `b51f829b`)
+- "Override Obat" & "Doomsday Override": Penyesuaian parameter intervensi darurat pada engine DSS Python untuk menangani kondisi ekstrem.
+- `BackEnd/src/modules/recommendations/recommendations.service.ts`: Perbaikan 44 baris logika output rekomendasi.
+
+#### 4. Enrichment Master Data (Commit: `e69ea65f`)
+- `BackEnd/src/db/schema/mst.ts`: Tambah 1 kolom baru.
+- `BackEnd/src/modules/master-data/master-data.router.ts`: +24 endpoint baru.
+- `BackEnd/src/modules/master-data/master-data.schema.ts`: +5 schema Zod baru.
+- `BackEnd/src/modules/master-data/master-data.service.ts`: +32 fungsi service.
+
+#### 5. Update Model Service Config
+- `Model/app/config.py`: +1 konfigurasi environment variable baru.
 
 ---
 
-## 3. Rekap Pengembangan Ketangguhan Sistem (Resilience) & Integrasi Pematang
+## 📊 Rekap Semua Update Sebelumnya
 
-Pada tahap pengembangan ekstensif terkait interaksi pengguna dan batasan agronomi lapangan, sistem *Decision Support System (DSS)* telah dirombak ulang untuk menangani masalah-masalah struktural di lapangan tanpa memperumit *hardware*.
+### A. Infrastruktur & Konektivitas
+- ✅ **Perbaikan DNS IPv6 Bug:** Tambah `dns.setDefaultResultOrder('ipv4first')` agar request ke BMKG API tidak gagal resolusi.
+- ✅ **Sentralisasi BMKG URL:** Base URL BMKG sekarang diambil dari `BMKG_BASE_URL` di `.env`.
+- ✅ **Per-Device MQTT Topic:** PostgreSQL trigger otomatis generate topic unik per device.
 
-### A. Penyederhanaan String Routing (Integrasi Manual)
-*   **Konversi Aksi Fisik:** Node.js *Routing Orchestrator* kini menghasilkan *string* operasional yang lebih *human-readable*, yaitu `"Buka pematang antara Kotak A dan B"`, bukan bahasa mekanik. Ini menyesuaikan ketiadaan gerbang air otomatis dan mengandalkan tenaga manual (cangkulan) petani.
-*   **Penghapusan Ambiguitas:** Output tidak mendikte "ukuran lebar galian" untuk mencegah misinterpretasi.
+### B. Schema Database (Total: 26 Migration Files)
+- ✅ `0004_fix_state_tables.sql` — Restrukturisasi tabel state (pisahkan history vs current).
+- ✅ `0005_sensor_max_distance.sql` — Tambah `sensor_max_distance_mm` untuk kalibrasi dinamis IoT.
+- ✅ `0006_routing_enrichment.sql` — Tambah `route_path_ids`, `priority_score` ke rekomendasi.
+- ✅ `0006_add_field_id_to_states.sql` — Tambah `field_id` ke state tables untuk query efisien.
+- ✅ `0007_add_bmkg_flags.sql` — Flag `is_latest` & `is_stale` di weather_forecast_snapshots.
+- ✅ `0007_add_embankments.sql` — **Tabel baru:** `mst.embankments` (pematang sawah/galengan).
+- ✅ `0008_embankments_connected_sub_blocks.sql` — Tambah `connected_sub_blocks[]` ke embankments.
+- ✅ `0009_update_device_topic_naming.sql` — Update format MQTT topic device.
+- ✅ `0010_add_irrigation_points_name_assigned_sub_blocks.sql` — Enrichment irrigation points.
+- ✅ `0011_add_elevation_calibration_and_pressure.sql` — Kalibrasi elevasi + pressure sensor.
+- ✅ `0012_aromatic_fallen_one.sql` — Schema tambahan untuk routing.
+- ✅ `0013_add_parent_station_to_devices.sql` — Hierarki device (parent station).
+- ✅ `0014_update_device_type_check.sql` — Perluas enum device_type.
+- ✅ `0015_sync_irrigation_recommendations.sql` — Sinkronisasi recommendations.
 
-### B. Mekanisme Pertahanan (Defense Mechanisms) di Python DSS
-Sistem kini memiliki 5 lapisan pertahanan:
-1. **Histeresis (Tolerance Margin):** `DRAIN_TOLERANCE_CM = 5.0`. Menghindari efek *ping-pong* alarm saat petani telat menutup air dan air meluap sedikit.
-2. **Night Block (Jam Malam):** Dari pukul 17:00 s.d 04:59, sistem akan memblokir (*veto*) rekomendasi `IRRIGATE` agar petani tidak membiarkan sawah mengalir semalaman sambil tidur (mencegah banjir kelalaian).
-3. **Pre-emptive Afternoon Drain:** Sistem memiliki kesadaran masa depan. Di sore hari (13:00 - 16:59), jika BMKG memprediksi badai malam harinya, DSS akan memaksa sawah dikuras sore itu juga sebagai ruang cadangan banjir.
-4. **Snooze Override:** Menambahkan dukungan `snooze_dss` di `management_flags` untuk menangguhkan seluruh alarm jika pematang hancur/jebol secara fisik.
-5. **Drought Override:** Mencegah sistem bertingkah bodoh (terus menyuruh *"IRRIGASI!"*) saat petani telah mengonfirmasi bahwa bendungan pusat/sungai sedang kering total (`is_source_depleted`).
+### C. Evolusi BMKG Rain Event Detection
+Mengubah logika lama (jumlah total curah hujan 24 jam) ke algoritma **Rain Event Detection** yang lebih presisi:
+- **Windowing 12 Jam:** Hanya fokus 4 slot × 3 jam ke depan.
+- **Rain Event Grouping:** Slot basah yang berurutan dikelompokkan menjadi satu "RainEvent" dengan metadata: durasi, puncak intensitas, jam_hingga_hujan.
+- **Storage JSONB:** Event hasil parsing disimpan di `trx.weather_forecast_snapshots.full_response_json`.
 
-### C. Massive Combinatorial Testing (Fuzzing)
-*   Algoritma baru telah diuji menggunakan skrip simulasi *Black Box Testing* secara masif (`massive_test_dss.py`).
-*   **Hasil:** Dari 640 permutasi acak skenario ekstrem (cuaca x tinggi air x waktu x input petani), sistem mencetak skor kelulusan kemananan **100% (0 Pelanggaran Logika)**. Mayoritas (70%) aksi menghasilkan status pasif/aman (`OBSERVE`), membuktikan bahwa sistem sangat efisien dan "tidak cerewet".
+### D. Evolusi DSS Python Engine
+Dari evaluasi sederhana threshold → matrix keputusan multi-dimensi:
+- **Matrix Veto Cuaca Bertingkat:** Silangkan kondisi lahan (5 level) × kehebatan badai (4 level).
+- **5 Defense Mechanisms:** Hysteresis, Night Block, Pre-emptive Drain, Snooze Override, Drought Override.
+- **Pengecualian Kritis:** `is_critical_dry` → abaikan semua veto cuaca → tetap IRRIGATE_CRITICAL.
+- **Massive Testing:** 640 permutasi skenario ekstrem → 100% pass.
+
+### E. Modul Baru BackEnd
+- ✅ **`assignments` module:** `/assignments/pending`, `/assignments/completed`, `POST /:id/action`.
+- ✅ **`agronomic-treatments` module:** Log intervensi agronomi manual lapangan.
+- ✅ **`embankments` module:** CRUD pematang sawah + bulk import GeoJSON.
+- ✅ **`telemetry/query` router:** Historical telemetry per sub-block.
+- ✅ **`hst-updater` cron job:** Update HST harian otomatis.
+
+### F. Routing String Humanisasi
+BackEnd Routing Orchestrator kini menghasilkan instruksi human-readable:
+- ❌ Lama: `"OPEN_GATE_TYPE_B_12L_SEC"`
+- ✅ Baru: `"Buka pematang antara Kotak A dan Kotak B"`
+
+---
+
+## 🎯 Status Kesiapan Sistem (29 Juni 2026)
+
+### ✅ Komponen Siap Production
+| Komponen | Bukti Kesiapan |
+|---|---|
+| BackEnd Node.js API | 15 modul aktif, RBAC lengkap, error handling |
+| Python DSS Engine | 640 skenario pass 100%, validasi Pydantic v2 |
+| Database Schema | 26 migrasi terurut, PostGIS + TimescaleDB |
+| BMKG Integration | Rain Event Detection + 12-jam windowing |
+| Firmware RiceMesh | Tested di lapangan (ada known bug prescaler) |
+
+### 🔧 Dalam Pengembangan Aktif
+| Komponen | Status |
+|---|---|
+| FrontEnd DSS Visual | Sedang disempurnakan (OpenLayers polygon overlay) |
+| Water Routing Arrows | FE perlu render `route_path_ids` sebagai polyline animasi |
+
+### 📋 Roadmap Developer Selanjutnya
+
+**Priority 1 — FrontEnd:**
+1. Render `route_path_ids` sebagai animated polyline/arrow di OpenLayers (jalur aliran air).
+2. Tampilkan status "Offline" sensor di dashboard meski interpolasi tetap berjalan.
+
+**Priority 2 — Infrastruktur:**
+1. Pastikan Redis berjalan di production untuk ARQ Worker GIS Floyd-Warshall.
+2. Rate limiting MQTT ingest (proteksi dari device malfungsi).
+
+**Priority 3 — DSS Expansion:**
+1. Kasus ekstrem: seluruh lahan banjir → buang ke gorong-gorong utama.
+2. Kasus ekstrem: seluruh lahan kering → sedot dari sumur pompa utama.
+
+**Priority 4 — Firmware:**
+1. Fix prescaler TIM1: `Prescaler = 47` → `Prescaler = 15` di semua STM32 nodes.
+2. Fix `Distance` variable overflow: `uint8_t` → `uint16_t`.

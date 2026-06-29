@@ -1,39 +1,187 @@
-# 🗄️ Dokumentasi Teknis Lanjut: Sistem Database (Polyglot)
+# 🗄️ Dokumentasi Database & Schema
+> **Update:** 29 Juni 2026 — Disesuaikan dengan 26 file migrasi aktual & schema Drizzle ORM terbaru
 
-## 1. Ikhtisar (Overview)
-Ini adalah mahakarya penyimpanan. Kita tidak membagi data menjadi berbagai server basis data yang terpisah. Seluruh data disimpan terpusat di `PostgreSQL` versi terbaru dengan konfigurasi 2 ekstensi mutlak (*PostGIS* dan *TimescaleDB*). Terhubung dengan port `5433` (konfigurasi dev Docker).
+## 1. Ikhtisar Arsitektur Database
 
-## 2. Struktur Skema (Drizzle ORM)
-Kode di `d:\PROTEL\src\BackEnd\src\db\schema\` tidak mengandung *raw SQL*. Proyek memanfaatkan tipe ketat *TypeScript* menggunakan Drizzle ORM.
+Database ProTel menggunakan arsitektur **Polyglot Database** di atas **Supabase Cloud** (managed PostgreSQL 16):
 
-### A. Skema Master (`mst.ts`)
-Berisi rancang bangun aset mati (Master Data):
-- `mst.users`: Autentikasi Pengguna & *Operator Roles*.
-- `mst.fields`: Data makro lapangan/lahan (*Entity/Tenant*).
-- `mst.sub_blocks`: Potongan per-petak sawah. Menyimpan tipe geometri `geometry(Polygon,4326)` di kolom `boundaries` dan menyimpan titik poros rute gravitasional air di kolom `centroid`.
-- `mst.flow_paths`: Arah irigasi. Titik A ke Titik B (*Edges* dalam teori Graf).
-- `mst.sensor_calibrations`: (*Baru ditambahkan*) Tempat mengikat panjang fisik tiang sensor IoT untuk fungsi kalibrasi dinamis (*Dynamic Calibration* `sensor_max_distance_mm`).
+| Ekstensi | Fungsi |
+|---|---|
+| **PostGIS** | Tipe data geometri: `GEOMETRY(Polygon)`, `GEOMETRY(Point)`. Query spasial: `ST_Centroid()`, `ST_Area()` |
+| **TimescaleDB** | Hypertable time-series: `trx.telemetry_records` dipartisi otomatis per waktu |
+| **pgcrypto** | `gen_random_uuid()` untuk semua primary key |
 
-### B. Skema Transaksi (`trx.ts`)
-Berisi rekam jejak fluktuatif sistem:
-- `trx.readings`: Hasil jepretan Telemetri dari IoT.
-- `trx.sub_block_current_states`: Keadaan saat ini (Fresh, Stale, No Data).
-- `trx.irrigation_recommendations`: Produk mutakhir dari sistem pakar (DSS). Disuntikkan dengan kolom perutean air (`route_path_ids`) berjenis array JSON.
+---
 
-## 3. Ekstensi PostGIS (Pemrosesan Geospasial Internal)
-Mengapa kita butuh koordinat poros (*Centroid*) petak sawah untuk kalkulasi rute, namun Node.js tidak pernah menghitungnya?
-- **Fungsi Trigger Asinkron:** Drizzle mengatur migrasi *Custom Postgres Trigger* yang diletakkan pada tabel `sub_blocks`. 
-- Kapanpun Frontend atau admin membengkokkan poligon bentuk petak sawah baru (`boundaries`), server basis data Postgres dengan sendirinya menjalankan rumus spasial C++ dari `ST_Centroid(NEW.boundaries)` dan menyimpannya secara transparan. Hal ini membuat Node.js lepas dari komputasi titik buta (*Blind Computation*).
+## 2. Empat Schema PostgreSQL
 
-## 4. Ekstensi TimescaleDB (Time-Series & Hypertable)
-Ratusan node IoT mengirim baris data suhu dan tinggi air per 5 Menit. 
-Dalam satu hari: 100 x (24 jam x 12 laporan) = **28.800 Ribu Baris**.
-Dalam setahun = **10.5 Juta Baris Data**.
-- **The Hypertable:** Kita mengubah tipe tabel konvensional `trx.readings` menjadi *Timescale Hypertable*.
-- **Partisi Waktu (*Time Partitioning*):** Database membelah 10 Juta baris ini ke dalam laci-laci per 1 bulan di belakang layar. Ketika Cron Job *State Builder* dari Node.js menanyakan *"Beri aku data 10 menit terakhir"*, Postgres tidak mencari (*Full Scan*) dari 10 Juta baris tadi, melainkan langsung menuju laci spesifik "Hari Ini". Kecepatannya instan O(1).
+```
+PostgreSQL Database
+├── mst.*     ← Master / Reference Data (data tidak sering berubah)
+├── trx.*     ← Transaksional (data aktif & time-series)
+├── sys.*     ← System internals (job queue, engine config)
+└── logs.*    ← Audit & observability (API logs, auth logs)
+```
 
-## 5. Deployment / Pemeliharaan (*Maintenance*)
-Seluruh versi database tersimpan di *log* `/migrations/meta/_journal.json`.
-Setiap developer backend yang melakukan perubahan ke tipe kolom (misal: penambahan konfigurasi pompa air baru di tabel) dilarang mengetik manual di database (*PgAdmin/DBeaver*).
-- Gunakan: `npx drizzle-kit generate:pg` untuk mencetak skrip SQL baru.
-- Gunakan: `npm run db:migrate` untuk mendorongnya secara permanen ke *Docker PostgreSQL*.
+### Schema `mst` — Master Data
+
+| Tabel | Baris Kunci | Deskripsi |
+|---|---|---|
+| `mst.rice_duration_buckets` | `bucket_code` PK | Referensi varietas padi (early/medium_early/medium/late) |
+| `mst.growth_phases` | `phase_code` PK | 8 fase pertumbuhan padi |
+| `mst.users` | `email` UNIQUE | User sistem dengan RBAC (system_admin/field_manager/operator) |
+| `mst.fields` | `adm4_code` | Lahan sawah utama. Punya `irrigation_edges/nodes` JSON untuk routing manual |
+| `mst.user_fields` | FK ke users + fields | Many-to-many: user dapat akses ke banyak field |
+| `mst.sub_blocks` | `unique_code` GENERATED | Petak sawah (sub-divisi dari field). Polygon GeoJSON + auto-centroid |
+| **`mst.embankments`** | `unique_code` GENERATED | **BARU:** Pematang/galengan sawah. Polygon + `connected_sub_blocks[]` |
+| `mst.flow_paths` | FK ke fields | Cache matriks Floyd-Warshall per field |
+| `mst.irrigation_points` | FK ke fields | Titik pompa/pintu air. `assigned_sub_blocks[]` |
+| `mst.devices` | `device_code` UNIQUE | Perangkat IoT. Punya `topic` (auto-generated via DB trigger) |
+| `mst.device_assignments` | FK device + sub_block | Riwayat penempatan device (historis) |
+| `mst.sensor_calibrations` | FK ke devices | Parameter kalibrasi termasuk `sensor_max_distance_mm` (default 1400mm) |
+| `mst.irrigation_rule_profiles` | FK bucket + phase | Profil aturan AWD: lower/upper threshold, drought alert |
+| `mst.crop_cycles` | FK sub_block + field | Siklus tanam aktif. `current_hst` di-update harian |
+| `mst.alert_configs` | FK field/sub_block | Konfigurasi threshold alert per lahan |
+| `mst.map_layers` | FK ke fields | Metadata citra drone (COG key di R2) |
+| `mst.system_settings` | singleton `id='global'` | Konfigurasi global sistem |
+
+### Schema `trx` — Transaksional
+
+| Tabel | Deskripsi |
+|---|---|
+| `trx.telemetry_records` | **TimescaleDB Hypertable.** Data sensor IoT. Kolom `event_timestamp` = partition key |
+| `trx.sub_block_states` | History state per-run (setiap 10 menit = 1 baris baru) |
+| `trx.sub_block_current_states` | **Upsert** state terkini (hanya 1 baris per sub-block) |
+| `trx.irrigation_recommendations` | Keluaran DSS. Kolom `route_path_ids` JSONB = jalur air |
+| `trx.management_events` | Event manual petani: `snooze_dss`, `drought_override` |
+| `trx.weather_forecast_snapshots` | Snapshot prakiraan BMKG. `is_latest` & `is_stale` flag |
+| `trx.weather_warning_snapshots` | Warning level aktif: `SKIP_CYCLE` / `DELAY_IRRIGATION` |
+| `trx.integration_logs` | Log setiap panggilan ke API eksternal (BMKG, GIS, DSS) |
+
+---
+
+## 3. Drizzle ORM — Koneksi & Pattern
+
+BackEnd menggunakan **Drizzle ORM** dengan client `drizzle-orm/pg-core` + `pg` (node-postgres).
+
+```typescript
+// db/client.ts
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { Pool } from 'pg';
+
+const pool = new Pool({ connectionString: config.DATABASE_URL });
+export const db = drizzle(pool, { schema: allSchemas });
+
+// Contoh query
+const fields = await db
+  .select()
+  .from(fieldsTable)
+  .where(eq(fieldsTable.isActive, true))
+  .orderBy(fieldsTable.name)
+  .limit(20);
+```
+
+### Custom Geometry Types (`db/geometry.ts`)
+Karena PostGIS menggunakan tipe `GEOMETRY` yang tidak ada di Drizzle standar, dibuat custom column types:
+```typescript
+export const geometryPolygon = (name: string) =>
+  customType<{ data: string }>({ ... })(name);
+
+export const geometryPoint = (name: string) =>
+  customType<{ data: string }>({ ... })(name);
+```
+Data geometri disimpan dan dibaca sebagai WKT (Well-Known Text) atau GeoJSON text di layer TypeScript.
+
+---
+
+## 4. Triggers & Generated Columns
+
+### Auto-Centroid Trigger
+Setiap kali row baru diinsert atau `polygon_geom` diupdate di `mst.sub_blocks` atau `mst.embankments`, PostgreSQL trigger otomatis menghitung centroid:
+```sql
+CREATE TRIGGER trg_sub_blocks_centroid
+  BEFORE INSERT OR UPDATE ON mst.sub_blocks
+  FOR EACH ROW EXECUTE FUNCTION compute_centroid();
+
+-- compute_centroid():
+NEW.centroid := ST_Centroid(ST_GeomFromText(NEW.polygon_geom));
+```
+
+### Auto-Updated-At Trigger
+Semua tabel yang memiliki `updated_at` menggunakan trigger `set_updated_at()`:
+```sql
+NEW.updated_at = now();
+```
+
+### Auto MQTT Topic Trigger
+Saat device baru dibuat atau dipindah ke sub-block berbeda, PostgreSQL trigger otomatis generate MQTT topic:
+```sql
+-- Format: field/{field_id}/sensor/{device_code}
+NEW.topic := 'field/' || NEW.field_id::text || '/sensor/' || NEW.device_code;
+```
+
+### Generated Column `unique_code`
+```sql
+-- Di mst.sub_blocks & mst.embankments:
+unique_code TEXT GENERATED ALWAYS AS (
+  COALESCE(code, 'nocode') || '_' || id::text
+) STORED;
+```
+
+---
+
+## 5. TimescaleDB Hypertable
+
+`trx.telemetry_records` adalah **TimescaleDB Hypertable** yang dipartisi secara otomatis berdasarkan `event_timestamp`. Keuntungan:
+- **Fast time-range queries:** `WHERE event_timestamp BETWEEN X AND Y` sangat cepat karena hanya membaca partisi relevan.
+- **Automatic compression:** Partisi tua dikompresi otomatis.
+- **Retention policies:** Data lama dapat dihapus otomatis (belum dikonfigurasi).
+
+```sql
+-- Buat hypertable
+SELECT create_hypertable('trx.telemetry_records', 'event_timestamp',
+  chunk_time_interval => INTERVAL '1 day');
+```
+
+---
+
+## 6. Workflow Database Developer
+
+### Tambah Kolom / Tabel Baru:
+```bash
+# 1. Edit schema Drizzle:
+#    src/db/schema/mst.ts  atau  src/db/schema/trx.ts
+
+# 2. Generate file migrasi SQL baru:
+npm run db:generate
+
+# 3. Review file SQL yang dihasilkan di database/migrations/
+
+# 4. Jalankan migrasi:
+npm run db:migrate
+```
+
+### Scripts Database Tersedia:
+| Command | Fungsi |
+|---|---|
+| `npm run db:generate` | Generate file SQL migration dari perubahan schema Drizzle |
+| `npm run db:migrate` | Jalankan semua migration SQL yang belum dieksekusi |
+| `npm run db:seed` | Seed data referensi wajib (varietas padi, fase pertumbuhan) |
+| `npm run db:seed:dev` | Seed dummy data development (fields, sub-blocks, dll.) |
+| `npm run db:setup` | `migrate` + `seed` (untuk production) |
+| `npm run db:setup:dev` | `migrate` + `seed` + `seed:dev` (untuk development) |
+| `npm run db:reset` | ⚠️ DEV ONLY: Hapus semua tabel & reset ulang dari 0 |
+| `npm run seed:admin` | Buat user `system_admin` pertama |
+
+---
+
+## 7. Indeks Kritis
+
+| Tabel | Kolom Diindeks | Alasan |
+|---|---|---|
+| `trx.telemetry_records` | `(sub_block_id, event_timestamp DESC)` | Query sensor terbaru per sub-block (state builder) |
+| `trx.sub_block_current_states` | `sub_block_id` UNIQUE | Upsert cepat, lookup O(1) |
+| `mst.sub_blocks` | `field_id`, `unique_code` UNIQUE | List sub-blocks per field, import check |
+| `mst.embankments` | `field_id`, `unique_code` UNIQUE | List embankments per field |
+| `mst.devices` | `device_code` UNIQUE, `sub_block_id` | Device lookup saat MQTT ingest |
+| `mst.sensor_calibrations` | `(device_id, is_active)` | Cepat ambil kalibrasi aktif saat ingest |
