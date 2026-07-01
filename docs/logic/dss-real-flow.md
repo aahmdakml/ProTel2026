@@ -394,28 +394,40 @@ Water Level (cm)
 ## 8. Scheduler — Cron Jobs Pendukung DSS
 
 ```mermaid
-gantt
-    title Jadwal Cron Jobs DSS (dalam 1 jam)
-    dateFormat mm
-    axisFormat %M menit
+flowchart LR
+    subgraph CRON["🕐 Cron Schedule (scheduler.service.ts)"]
+        direction TB
+        J1["📊 state-builder.job\n⏱️ */10 * * * *\n➜ Tiap 10 menit\nRefresh sub_block_current_states"]
+        J2["🚩 stale-flag.job\n⏱️ */15 * * * *\n➜ Tiap 15 menit\nUpdate freshness_status"]
+        J3["☁️ bmkg-sync.job\n⏱️ 0 */3 * * *\n➜ Tiap 3 jam\nFetch prakiraan BMKG"]
+        J4["🧠 decision-cycle.job\n⏱️ */30 * * * *\n➜ Tiap 30 menit\nnormal=60min, siaga=30min"]
+        J5["🌾 hst-updater.job\n⏱️ 0 0 * * *\n➜ Tengah malam\nIncrement current_hst"]
+    end
 
-    section State Builder
-    state-builder.job (tiap 10 menit)     : 00, 10m
-    state-builder.job                      : 10, 10m
-    state-builder.job                      : 20, 10m
-    state-builder.job                      : 30, 10m
-    state-builder.job                      : 40, 10m
-    state-builder.job                      : 50, 10m
-
-    section Stale Flag
-    stale-flag.job (tiap 15 menit)        : 00, 15m
-    stale-flag.job                         : 15, 15m
-    stale-flag.job                         : 30, 15m
-    stale-flag.job                         : 45, 15m
-
-    section Decision Cycle
-    decision-cycle.job normal (jam:00)    : 00, 5m
-    decision-cycle.job siaga (jam:30)     : 30, 5m
+    subgraph ORDER["Urutan dalam 1 siklus DSS"]
+        direction LR
+        T1["`**Menit ke-0**
+        state-builder
+        stale-flag`"] -->
+        T2["`**Menit ke-10**
+        state-builder`"] -->
+        T3["`**Menit ke-15**
+        stale-flag`"] -->
+        T4["`**Menit ke-20**
+        state-builder`"] -->
+        T5["`**Menit ke-30**
+        state-builder
+        stale-flag
+        decision-cycle`"] -->
+        T6["`**Menit ke-40**
+        state-builder`"] -->
+        T7["`**Menit ke-45**
+        stale-flag`"] -->
+        T8["`**Menit ke-50**
+        state-builder`"] -->
+        T9["`**Jam berikutnya**
+        → ulang`"]
+    end
 ```
 
 | Job | Interval | Fungsi |
